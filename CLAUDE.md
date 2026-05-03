@@ -31,6 +31,10 @@ docs/           Architecture docs and diagrams
 | `backend/app/graph/state.py` | LangGraph `ResearchState` TypedDict |
 | `backend/app/graph/workflow.py` | LangGraph compiled graph |
 
+## Current status
+
+Week 1 Day 3 complete. Next.js 16 + React 19 + Tailwind v4 frontend scaffolded. Single-page research interface (`frontend/app/page.tsx`) with type-safe API client (`frontend/lib/api.ts`). No UI libraries; useState only; 30s timeout; plain fetch. Production build verified. Ready for Day 4 (LangGraph agent wiring).
+
 ## Dev workflow
 
 ```powershell

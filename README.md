@@ -22,7 +22,16 @@ Copy-Item .env.example .env   # then fill in real keys
 
 ### Frontend
 
-TBD (Week 1 Day 3)
+Prerequisites: Node 18+ (Node 20 LTS recommended)
+
+```powershell
+cd frontend
+npm install
+Copy-Item .env.local.example .env.local   # already set to http://localhost:8000
+npm run dev
+```
+
+> The backend must already be running on port 8000 before starting the frontend.
 
 ## Running locally
 
