@@ -33,7 +33,13 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 1 Day 4 complete. Real LLM client with Groq primary + Gemini fallback (google-genai SDK), per-call timeouts, structured exception handling (LLMUnavailableError), token + latency metadata. /research endpoint returns real model-generated answers (no search yet). 8+ pytest tests passing including mocked fallback paths.
+Week 1 Day 5 complete. Tavily search integrated; /research endpoint is now full RAG (search → context-formatted prompt → grounded answer with [1]/[2] citations → sources array). Frontend renders source cards. 12+ pytest tests passing including search mocks. This is the locked baseline — Week 2 multi-agent graph will be evaluated against it.
+
+## Architecture
+
+Current baseline (locked after Day 5): **Search (Tavily) → Generate (Groq w/ Gemini fallback)** — a single-pass RAG system, not multi-agent yet.
+
+Week 2 target (multi-agent, for eval comparison): Agents in a LangGraph state machine: Planner → Searcher → Fact-checker → Writer → Critic.
 
 ## Known issues
 

@@ -69,15 +69,45 @@ export default function Home() {
       )}
 
       {result && !loading && (
-        <div className="border rounded-lg p-4 mt-6">
-          <p className="whitespace-pre-wrap">{result.answer}</p>
-          <div className="flex items-center gap-2 mt-3">
-            <span className="text-sm text-gray-500">Answered in {result.elapsed_ms}ms</span>
-            <span className="rounded-full px-2 py-0.5 bg-gray-100 text-gray-700 text-xs">
-              {result.mode}
-            </span>
+        <>
+          <div className="border rounded-lg p-4 mt-6">
+            <p className="whitespace-pre-wrap">{result.answer}</p>
+            <div className="flex items-center gap-2 mt-3">
+              <span className="text-sm text-gray-500">Answered in {result.elapsed_ms}ms</span>
+              <span className="rounded-full px-2 py-0.5 bg-gray-100 text-gray-700 text-xs">
+                {result.mode}
+              </span>
+            </div>
           </div>
-        </div>
+
+          {result.sources.length > 0 && (
+            <div>
+              <p className="text-sm font-medium text-gray-700 mt-6 mb-2">Sources</p>
+              {result.sources.map((source, index) => (
+                <div
+                  key={source.url}
+                  className="border rounded-lg p-3 mb-2 hover:border-gray-400 transition"
+                >
+                  <div>
+                    <span className="rounded px-2 py-0.5 bg-gray-100 text-gray-700 text-xs font-mono mr-2">
+                      [{index + 1}]
+                    </span>
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline font-medium"
+                    >
+                      {source.title}
+                    </a>
+                  </div>
+                  <p className="text-xs text-gray-500 truncate mt-1">{source.url}</p>
+                  <p className="text-sm text-gray-700 mt-1 line-clamp-3">{source.snippet}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {error && !loading && (

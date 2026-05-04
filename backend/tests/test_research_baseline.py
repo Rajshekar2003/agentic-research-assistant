@@ -1,4 +1,4 @@
-"""Tests for the /research endpoint — baseline (real LLM, no search)."""
+"""Tests for the /research endpoint — RAG baseline (mocked search + LLM)."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.llm.client import LLMResult, LLMUnavailableError
 from app.main import app
 from app.schemas import ResearchResponse
+from app.tools.search import SearchResult, SearchUnavailableError
 
 client = TestClient(app)
 
@@ -23,13 +24,28 @@ def _mock_llm_result(text: str = "Mocked LLM answer.") -> LLMResult:
     )
 
 
+def _mock_search_results() -> list[SearchResult]:
+    return [
+        SearchResult(
+            title="Example Source",
+            url="https://example.com/article",
+            content="Relevant content about the topic.",
+            score=0.9,
+        )
+    ]
+
+
 def test_research_accepts_valid_query(monkeypatch):
-    """Valid query returns 200 with model-generated answer and mode='baseline'."""
-    expected_text = "The capital of France is Paris."
+    """Valid query returns 200 with grounded answer, sources populated, mode='baseline'."""
+    expected_text = "The capital of France is Paris. [1]"
     mock_complete = AsyncMock(return_value=_mock_llm_result(expected_text))
     mock_llm = MagicMock()
     mock_llm.complete = mock_complete
     monkeypatch.setattr("app.api.research.get_llm_client", lambda: mock_llm)
+    monkeypatch.setattr(
+        "app.api.research.search",
+        AsyncMock(return_value=_mock_search_results()),
+    )
 
     response = client.post("/research", json={"query": "what is the capital of France"})
 
@@ -38,19 +54,40 @@ def test_research_accepts_valid_query(monkeypatch):
     assert data.answer == expected_text
     assert data.mode == "baseline"
     assert data.elapsed_ms >= 0
+    assert len(data.sources) == 1
+    assert data.sources[0].title == "Example Source"
 
 
 def test_research_returns_503_when_llm_unavailable(monkeypatch):
-    """LLMUnavailableError is caught and returned as HTTP 503."""
+    """LLMUnavailableError is caught and returned as HTTP 503 with correct detail."""
     mock_complete = AsyncMock(side_effect=LLMUnavailableError("Both failed."))
     mock_llm = MagicMock()
     mock_llm.complete = mock_complete
     monkeypatch.setattr("app.api.research.get_llm_client", lambda: mock_llm)
+    monkeypatch.setattr(
+        "app.api.research.search",
+        AsyncMock(return_value=_mock_search_results()),
+    )
 
     response = client.post("/research", json={"query": "what is the capital of France"})
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Research service temporarily unavailable"
+
+
+def test_research_returns_503_when_search_unavailable(monkeypatch):
+    """SearchUnavailableError short-circuits the pipeline and returns HTTP 503."""
+    monkeypatch.setattr(
+        "app.api.research.search",
+        AsyncMock(
+            side_effect=SearchUnavailableError("Search service temporarily unavailable")
+        ),
+    )
+
+    response = client.post("/research", json={"query": "what is the capital of France"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Search service temporarily unavailable"
 
 
 def test_research_rejects_short_query():
