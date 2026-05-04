@@ -33,7 +33,11 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 1 Day 3 complete. Next.js 16 + React 19 + Tailwind v4 frontend scaffolded. Single-page research interface (`frontend/app/page.tsx`) with type-safe API client (`frontend/lib/api.ts`). No UI libraries; useState only; 30s timeout; plain fetch. Production build verified. Ready for Day 4 (LangGraph agent wiring).
+Week 1 Day 4 complete. Real LLM client with Groq primary + Gemini fallback (google-genai SDK), per-call timeouts, structured exception handling (LLMUnavailableError), token + latency metadata. /research endpoint returns real model-generated answers (no search yet). 8+ pytest tests passing including mocked fallback paths.
+
+## Known issues
+
+- Token counting in Gemini fallback path may show None for tokens_in/tokens_out depending on SDK version — non-blocking, eval harness in Week 4 will use prompt_token_count from native API responses.
 
 ## Dev workflow
 
