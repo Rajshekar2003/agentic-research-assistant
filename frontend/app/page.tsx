@@ -5,6 +5,7 @@ import { runResearch, type ResearchResponse } from '@/lib/api';
 
 export default function Home() {
   const [query, setQuery] = useState('');
+  const [mode, setMode] = useState<'baseline' | 'graph'>('baseline');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ResearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +18,7 @@ export default function Home() {
     setResult(null);
     setError(null);
     try {
-      const data = await runResearch(query.trim());
+      const data = await runResearch(query.trim(), mode);
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
@@ -38,6 +39,27 @@ export default function Home() {
       <p className="text-gray-600 mb-8">
         Ask anything. The system will search the web and synthesize an answer.
       </p>
+
+      <div className="flex gap-2 mb-4">
+        <button
+          type="button"
+          onClick={() => setMode('baseline')}
+          className={`rounded-full px-4 py-1 text-sm font-medium transition ${
+            mode === 'baseline' ? 'bg-black text-white' : 'bg-gray-100 text-gray-700'
+          }`}
+        >
+          Baseline
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode('graph')}
+          className={`rounded-full px-4 py-1 text-sm font-medium transition ${
+            mode === 'graph' ? 'bg-black text-white' : 'bg-gray-100 text-gray-700'
+          }`}
+        >
+          Graph
+        </button>
+      </div>
 
       <form ref={formRef} onSubmit={handleSubmit}>
         <label htmlFor="query" className="sr-only">

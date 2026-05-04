@@ -16,17 +16,25 @@ export interface ResearchResponse {
 /**
  * Submit a natural-language query to the backend research endpoint.
  *
+ * @param query - The natural-language research question.
+ * @param mode  - Which pipeline to use: "baseline" hits POST /research,
+ *                "graph" hits POST /research/graph. Defaults to "baseline".
+ *
  * Applies a 30-second AbortController timeout. Throws an Error on network
  * failure, timeout, or non-2xx HTTP status. The error message is extracted
  * from the response body's `detail` field when available.
  */
-export async function runResearch(query: string): Promise<ResearchResponse> {
+export async function runResearch(
+  query: string,
+  mode: 'baseline' | 'graph' = 'baseline',
+): Promise<ResearchResponse> {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30_000);
+  const url = mode === 'graph' ? `${apiUrl}/research/graph` : `${apiUrl}/research`;
 
   try {
-    const response = await fetch(`${apiUrl}/research`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query }),

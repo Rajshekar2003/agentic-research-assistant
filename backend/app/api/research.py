@@ -2,7 +2,7 @@
 
 # Day 4 done: Real LLM client (Groq primary, Gemini fallback).
 # Day 5 done: Tavily search → context-formatted prompt → grounded answer with [1]/[2] citations.
-# Day 6 TODO: Wrap in LangGraph state machine for multi-agent evaluation.
+# Day 6 done: POST /research/graph wraps the same pipeline in a single-node LangGraph graph.
 """
 
 import logging
@@ -10,6 +10,7 @@ import time
 
 from fastapi import APIRouter, HTTPException
 
+from app.graph.workflow import get_compiled_graph
 from app.llm.client import LLMUnavailableError, get_llm_client
 from app.schemas import ResearchRequest, ResearchResponse, Source
 from app.tools.search import SearchUnavailableError, search
@@ -114,4 +115,58 @@ async def run_research(request: ResearchRequest) -> ResearchResponse:
         sources=sources,
         elapsed_ms=total_elapsed_ms,
         mode="baseline",
+    )
+
+
+@router.post("/graph", response_model=ResearchResponse)
+async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
+    """Run the RAG pipeline through the single-node LangGraph state machine.
+
+    Invokes the compiled graph with the query and maps the resulting state
+    into a ResearchResponse.  The graph node performs the same search +
+    generate pipeline as the baseline endpoint, enabling apples-to-apples
+    comparison in Week 4 evals.
+
+    # TODO Week 2: replace the single research_node with the multi-agent flow
+    #   (planner → searcher → fact_checker → writer → critic).
+    # TODO Week 4: eval harness will hit this endpoint for graph-mode runs.
+
+    Args:
+        request: Validated research request containing the query string.
+
+    Returns:
+        ResearchResponse with grounded answer, source list, wall-clock elapsed
+        time, and mode set to "graph".
+
+    Raises:
+        HTTPException: 503 if search is unavailable or both LLM providers fail.
+    """
+    start = time.perf_counter()
+    logger.info("Research graph query received: %.100s path=graph", request.query)
+
+    try:
+        state = await get_compiled_graph().ainvoke({"query": request.query})
+    except SearchUnavailableError:
+        raise HTTPException(status_code=503, detail="Search service temporarily unavailable")
+    except LLMUnavailableError:
+        raise HTTPException(status_code=503, detail="Research service temporarily unavailable")
+
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+    logger.info(
+        "Research graph complete: path=graph provider=%s model=%s "
+        "search_results_count=%d elapsed_ms=%d tokens_in=%s tokens_out=%s",
+        state.get("provider"),
+        state.get("model"),
+        len(state.get("search_results") or []),
+        elapsed_ms,
+        state.get("tokens_in"),
+        state.get("tokens_out"),
+    )
+
+    return ResearchResponse(
+        answer=state["final_answer"],
+        sources=state["sources"],
+        elapsed_ms=elapsed_ms,
+        mode="graph",
     )

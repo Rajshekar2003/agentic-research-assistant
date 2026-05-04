@@ -33,13 +33,15 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 1 Day 5 complete. Tavily search integrated; /research endpoint is now full RAG (search → context-formatted prompt → grounded answer with [1]/[2] citations → sources array). Frontend renders source cards. 12+ pytest tests passing including search mocks. This is the locked baseline — Week 2 multi-agent graph will be evaluated against it.
+Week 1 Day 6 complete. POST /research/graph endpoint runs the same RAG pipeline through a single-node LangGraph state machine. POST /research (baseline) untouched — kept as permanent eval comparison point. Frontend has Baseline/Graph toggle. 19+ pytest tests passing. Ready for Day 7 (architecture diagram + Week 1 retro). Week 2 will replace the single graph node with planner → searcher → fact_checker → writer → critic flow.
 
 ## Architecture
 
-Current baseline (locked after Day 5): **Search (Tavily) → Generate (Groq w/ Gemini fallback)** — a single-pass RAG system, not multi-agent yet.
+Current graph (Day 6): **1 node** — `research_node` = search + write, same pipeline as the baseline.  The `mode` field in ResearchResponse (`"baseline"` | `"graph"`) lets the Week 4 eval harness compare both paths on the same HotpotQA queries.
 
-Week 2 target (multi-agent, for eval comparison): Agents in a LangGraph state machine: Planner → Searcher → Fact-checker → Writer → Critic.
+Current baseline (locked after Day 5): **Search (Tavily) → Generate (Groq w/ Gemini fallback)** — a single-pass RAG system, not multi-agent yet.  Served by POST /research; must not change.
+
+Week 2 target (multi-agent, for eval comparison): **5 nodes** in a LangGraph state machine: Planner → Searcher → Fact-checker → Writer → Critic.  Will be served by POST /research/graph (replacing the single-node graph).
 
 ## Known issues
 
