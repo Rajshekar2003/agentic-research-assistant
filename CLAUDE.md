@@ -33,7 +33,7 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 1 Day 6 complete. POST /research/graph endpoint runs the same RAG pipeline through a single-node LangGraph state machine. POST /research (baseline) untouched — kept as permanent eval comparison point. Frontend has Baseline/Graph toggle. 19+ pytest tests passing. Ready for Day 7 (architecture diagram + Week 1 retro). Week 2 will replace the single graph node with planner → searcher → fact_checker → writer → critic flow.
+Week 1 complete. Architecture documented (docs/architecture.md), retro written (docs/week1-retro.md). Baseline RAG + single-node graph both shipped, 23 tests passing, frontend has Baseline/Graph toggle. Ready for Week 2 (multi-agent: Planner → Searcher → FactChecker → Writer → Critic with feedback loop).
 
 ## Architecture
 
