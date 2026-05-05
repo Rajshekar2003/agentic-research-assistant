@@ -33,15 +33,15 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 1 complete. Architecture documented (docs/architecture.md), retro written (docs/week1-retro.md). Baseline RAG + single-node graph both shipped, 23 tests passing, frontend has Baseline/Graph toggle. Ready for Week 2 (multi-agent: Planner → Searcher → FactChecker → Writer → Critic with feedback loop).
+Week 2 Day 8 complete. Multi-agent foundation: Planner → Searcher graph (2 nodes). Planner decomposes the query into 2-4 sub-questions; Searcher runs Tavily per sub-question with global URL dedup and an 8-result cap, then synthesizes a grounded answer. Baseline endpoint untouched. ~30 pytest tests passing. Day 9 will add FactChecker between Searcher and Writer.
 
 ## Architecture
 
-Current graph (Day 6): **1 node** — `research_node` = search + write, same pipeline as the baseline.  The `mode` field in ResearchResponse (`"baseline"` | `"graph"`) lets the Week 4 eval harness compare both paths on the same HotpotQA queries.
+Current graph (Day 8): **2 nodes** — `planner` decomposes the query into 2-4 sub-questions; `searcher` runs Tavily per sub-question, deduplicates URLs globally (cap 8), and calls the LLM to synthesize a grounded answer.  The `mode` field in ResearchResponse (`"baseline"` | `"graph"`) lets the Week 4 eval harness compare both paths on the same HotpotQA queries.
 
 Current baseline (locked after Day 5): **Search (Tavily) → Generate (Groq w/ Gemini fallback)** — a single-pass RAG system, not multi-agent yet.  Served by POST /research; must not change.
 
-Week 2 target (multi-agent, for eval comparison): **5 nodes** in a LangGraph state machine: Planner → Searcher → Fact-checker → Writer → Critic.  Will be served by POST /research/graph (replacing the single-node graph).
+Week 2 target (multi-agent, for eval comparison): **5 nodes** in a LangGraph state machine: Planner → Searcher → FactChecker → Writer → Critic.  Days 9-11 will add FactChecker, a dedicated Writer node (splitting the LLM call out of Searcher), and Critic with conditional feedback loop.  Served by POST /research/graph.
 
 ## Known issues
 

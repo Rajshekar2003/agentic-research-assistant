@@ -120,15 +120,17 @@ async def run_research(request: ResearchRequest) -> ResearchResponse:
 
 @router.post("/graph", response_model=ResearchResponse)
 async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
-    """Run the RAG pipeline through the single-node LangGraph state machine.
+    """Run the query through the multi-agent LangGraph state machine.
 
     Invokes the compiled graph with the query and maps the resulting state
-    into a ResearchResponse.  The graph node performs the same search +
-    generate pipeline as the baseline endpoint, enabling apples-to-apples
-    comparison in Week 4 evals.
+    into a ResearchResponse.  The graph runs Planner → Searcher (Day 8),
+    with FactChecker, Writer, and Critic added on Days 9-11, enabling
+    apples-to-apples comparison against the baseline in Week 4 evals.
 
-    # TODO Week 2: replace the single research_node with the multi-agent flow
-    #   (planner → searcher → fact_checker → writer → critic).
+    # Day 8 done: 2-node graph (planner → searcher).
+    # TODO Day 9: add fact_checker between searcher and writer.
+    # TODO Day 10: split searcher's LLM call into a dedicated writer node.
+    # TODO Day 11: add critic with conditional edge back to writer.
     # TODO Week 4: eval harness will hit this endpoint for graph-mode runs.
 
     Args:
@@ -155,13 +157,14 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
 
     logger.info(
         "Research graph complete: path=graph provider=%s model=%s "
-        "search_results_count=%d elapsed_ms=%d tokens_in=%s tokens_out=%s",
+        "search_results_count=%d elapsed_ms=%d tokens_in=%s tokens_out=%s plan_size=%d",
         state.get("provider"),
         state.get("model"),
         len(state.get("search_results") or []),
         elapsed_ms,
         state.get("tokens_in"),
         state.get("tokens_out"),
+        len(state.get("plan") or []),
     )
 
     return ResearchResponse(

@@ -1,4 +1,4 @@
-"""Tests for the LangGraph workflow — compiled graph and research_node behaviour."""
+"""Tests for the LangGraph workflow — compiled graph and 2-node pipeline behaviour."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -49,14 +49,19 @@ def test_graph_compiles():
     assert g1 is g2
 
 
-async def test_graph_research_node_happy_path(monkeypatch):
-    """research_node populates all expected state fields on a successful run."""
+async def test_graph_two_node_happy_path(monkeypatch):
+    """Planner + Searcher nodes together populate all expected state fields."""
     expected_text = "The answer is 42. [1]"
-    mock_complete = AsyncMock(return_value=_mock_llm_result(expected_text))
+    # First complete() call → planner plan; second → searcher answer.
     mock_llm = MagicMock()
-    mock_llm.complete = mock_complete
-    monkeypatch.setattr("app.graph.workflow.search", AsyncMock(return_value=_mock_search_results()))
-    monkeypatch.setattr("app.graph.workflow.get_llm_client", lambda: mock_llm)
+    mock_llm.complete = AsyncMock(
+        side_effect=[_mock_llm_result('["What is 42?"]'), _mock_llm_result(expected_text)]
+    )
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: mock_llm)
+    monkeypatch.setattr(
+        "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
+    )
+    monkeypatch.setattr("app.agents.searcher.get_llm_client", lambda: mock_llm)
 
     graph = get_compiled_graph()
     state = await graph.ainvoke({"query": "test query for graph"})
@@ -68,19 +73,22 @@ async def test_graph_research_node_happy_path(monkeypatch):
     assert state["model"] == "llama-3.3-70b-versatile"
     assert state["tokens_in"] == 10
     assert state["tokens_out"] == 20
-    assert isinstance(state["elapsed_ms"], int)
-    assert state["elapsed_ms"] >= 0
+    assert isinstance(state.get("elapsed_ms"), int)
+    assert state["plan"] == ["What is 42?"]
     assert len(state["search_results"]) == 1
 
 
-async def test_graph_research_node_propagates_search_failure(monkeypatch):
-    """SearchUnavailableError raised inside the node propagates through ainvoke().
+async def test_graph_propagates_search_failure(monkeypatch):
+    """SearchUnavailableError raised inside the searcher propagates through ainvoke().
 
-    For Week 1 simplicity we let the exception propagate rather than capturing
-    it in state — the API endpoint is responsible for converting it to a 503.
+    The planner succeeds first; then the searcher's Tavily call fails.  The exception
+    propagates out of ainvoke() so the API endpoint can convert it to a 503.
     """
+    plan_llm = MagicMock()
+    plan_llm.complete = AsyncMock(return_value=_mock_llm_result('["test question"]'))
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: plan_llm)
     monkeypatch.setattr(
-        "app.graph.workflow.search",
+        "app.agents.searcher.search",
         AsyncMock(side_effect=SearchUnavailableError("Search service temporarily unavailable")),
     )
 
@@ -89,19 +97,14 @@ async def test_graph_research_node_propagates_search_failure(monkeypatch):
         await graph.ainvoke({"query": "test query"})
 
 
-async def test_graph_research_node_propagates_llm_failure(monkeypatch):
-    """LLMUnavailableError raised inside the node propagates through ainvoke().
+async def test_graph_propagates_llm_failure(monkeypatch):
+    """LLMUnavailableError raised inside the planner propagates through ainvoke().
 
     Same propagation contract as search failures — the API endpoint catches it.
     """
-    monkeypatch.setattr(
-        "app.graph.workflow.search",
-        AsyncMock(return_value=_mock_search_results()),
-    )
-    mock_complete = AsyncMock(side_effect=LLMUnavailableError("Both providers failed."))
     mock_llm = MagicMock()
-    mock_llm.complete = mock_complete
-    monkeypatch.setattr("app.graph.workflow.get_llm_client", lambda: mock_llm)
+    mock_llm.complete = AsyncMock(side_effect=LLMUnavailableError("Both providers failed."))
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: mock_llm)
 
     graph = get_compiled_graph()
     with pytest.raises(LLMUnavailableError):
