@@ -1,5 +1,9 @@
 """Shared state passed between LangGraph nodes.
 
+Day 9 — `facts` is populated by FactChecker as a list of dicts, each with a
+verified claim and the source IDs that support it (e.g. {"claim": "...", "sources": [1, 3]}).
+Currently exposed in API responses; frontend rendering is a Day 13 stretch goal.
+
 In Week 1 only the searcher and writer nodes touch this state; Week 2 adds
 planner/fact_checker/critic. Fields are populated incrementally — early-week
 nodes leave later-week fields empty.
@@ -12,7 +16,7 @@ class ResearchState(TypedDict, total=False):
     query: str            # input — caller (Week 1)
     plan: list[str]       # Planner — Week 2
     search_results: list  # Searcher — Week 1 Day 6
-    facts: list[str]      # Fact-checker — Week 2
+    facts: list[dict]     # FactChecker — each dict: {"claim": str, "sources": list[int]}
     draft: str            # Writer — Week 2
     critique: str         # Critic — Week 2
     revision_count: int   # Critic loop guard — Week 2

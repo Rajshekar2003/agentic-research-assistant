@@ -1,11 +1,14 @@
-"""Tests for the Searcher agent (app/agents/searcher.py)."""
+"""Tests for the Searcher agent (app/agents/searcher.py).
+
+Day 9: Searcher is retrieval-only — it no longer calls the LLM. Tests reflect this:
+LLM helpers are removed and test_searcher_does_not_call_llm verifies the invariant.
+"""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.agents.searcher import run as searcher_run
-from app.llm.client import LLMResult
 from app.tools.search import SearchResult, SearchUnavailableError
 
 
@@ -23,26 +26,28 @@ def _mock_search_result(url: str, score: float = 0.9) -> SearchResult:
     )
 
 
-def _mock_llm_result(text: str = "Synthesized answer.") -> LLMResult:
-    return LLMResult(
-        text=text,
-        provider="groq",
-        model="llama-3.3-70b-versatile",
-        latency_ms=60,
-        tokens_in=100,
-        tokens_out=30,
-    )
-
-
-def _make_mock_llm(text: str = "Synthesized answer.") -> MagicMock:
-    mock_llm = MagicMock()
-    mock_llm.complete = AsyncMock(return_value=_mock_llm_result(text))
-    return mock_llm
-
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+async def test_searcher_does_not_call_llm(monkeypatch):
+    """Searcher is retrieval-only as of Day 9 — get_llm_client must never be invoked."""
+    mock_search = AsyncMock(return_value=[_mock_search_result("https://example.com/1")])
+    monkeypatch.setattr("app.agents.searcher.search", mock_search)
+
+    def _llm_must_not_be_called():
+        raise AssertionError("Searcher called get_llm_client — it should be retrieval-only")
+
+    monkeypatch.setattr("app.llm.client.get_llm_client", _llm_must_not_be_called)
+
+    state = {"query": "no llm please", "plan": ["no llm please"]}
+    result = await searcher_run(state)
+
+    assert result["provider"] is None
+    assert result["model"] is None
+    assert result["tokens_in"] is None
+    assert result["tokens_out"] is None
 
 
 async def test_searcher_runs_search_per_subquestion(monkeypatch):
@@ -50,7 +55,6 @@ async def test_searcher_runs_search_per_subquestion(monkeypatch):
     plan = ["cause of WW1", "timeline of WW1", "key leaders of WW1"]
     mock_search = AsyncMock(return_value=[_mock_search_result("https://example.com/1")])
     monkeypatch.setattr("app.agents.searcher.search", mock_search)
-    monkeypatch.setattr("app.agents.searcher.get_llm_client", lambda: _make_mock_llm())
 
     state = {"query": "Tell me about World War 1", "plan": plan}
     await searcher_run(state)
@@ -73,7 +77,6 @@ async def test_searcher_dedupes_urls_across_calls(monkeypatch):
     ]
     mock_search = AsyncMock(side_effect=[results_q1, results_q2])
     monkeypatch.setattr("app.agents.searcher.search", mock_search)
-    monkeypatch.setattr("app.agents.searcher.get_llm_client", lambda: _make_mock_llm())
 
     state = {"query": "test dedup query", "plan": ["q1", "q2"]}
     result = await searcher_run(state)
@@ -102,7 +105,6 @@ async def test_searcher_caps_results_at_8(monkeypatch):
         ]
     )
     monkeypatch.setattr("app.agents.searcher.search", mock_search)
-    monkeypatch.setattr("app.agents.searcher.get_llm_client", lambda: _make_mock_llm())
 
     state = {"query": "complex query", "plan": ["q1", "q2", "q3", "q4"]}
     result = await searcher_run(state)
@@ -114,7 +116,6 @@ async def test_searcher_handles_single_element_plan(monkeypatch):
     """With a 1-item plan, search is called once with max_results=5."""
     mock_search = AsyncMock(return_value=[_mock_search_result("https://example.com/single")])
     monkeypatch.setattr("app.agents.searcher.search", mock_search)
-    monkeypatch.setattr("app.agents.searcher.get_llm_client", lambda: _make_mock_llm())
 
     state = {"query": "simple question", "plan": ["simple question"]}
     await searcher_run(state)

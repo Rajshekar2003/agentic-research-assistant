@@ -22,6 +22,20 @@ class Source(BaseModel):
     snippet: str = Field(..., max_length=2000)
 
 
+class Fact(BaseModel):
+    """A verified claim extracted by FactChecker, with supporting source IDs.
+
+    Args:
+        claim: The verified statement (non-empty).
+        sources: 1-indexed IDs of the sources that support this claim.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, populate_by_name=True)
+
+    claim: str = Field(..., min_length=1)
+    sources: list[int]
+
+
 class ResearchRequest(BaseModel):
     """Incoming research query submitted by the client.
 
@@ -57,6 +71,8 @@ class ResearchResponse(BaseModel):
         sources: List of supporting sources (empty for stub/baseline).
         elapsed_ms: Wall-clock time spent processing the request, in milliseconds.
         mode: Which pipeline path produced this response.
+        facts: Verified claims with source attribution; None for the baseline endpoint.
+               Only the graph endpoint populates this field (Day 9+).
     """
 
     model_config = ConfigDict(str_strip_whitespace=True, populate_by_name=True)
@@ -65,6 +81,7 @@ class ResearchResponse(BaseModel):
     sources: list[Source] = []
     elapsed_ms: int = Field(..., ge=0)
     mode: Literal["baseline", "graph"] = "baseline"
+    facts: list[Fact] | None = None
 
 
 class HealthResponse(BaseModel):

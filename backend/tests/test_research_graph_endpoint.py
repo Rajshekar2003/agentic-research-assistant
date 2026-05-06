@@ -1,5 +1,11 @@
-"""Tests for the POST /research/graph endpoint (LangGraph path)."""
+"""Tests for the POST /research/graph endpoint (LangGraph path).
 
+Day 9: 3-node graph (planner → searcher → fact_checker).
+Searcher no longer calls the LLM; FactChecker does.
+Total LLM calls per request: 2 (planner + fact_checker).
+"""
+
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
@@ -41,13 +47,14 @@ def _mock_search_results() -> list[SearchResult]:
     ]
 
 
-def _make_two_call_mock_llm(plan_json: str, answer_text: str) -> MagicMock:
-    """Return a mock LLM client whose complete() yields the plan then the answer."""
-    mock_llm = MagicMock()
-    mock_llm.complete = AsyncMock(
-        side_effect=[_mock_llm_result(plan_json), _mock_llm_result(answer_text)]
+def _fc_json(answer: str = "France's capital is Paris. [1]") -> str:
+    """Return a valid FactChecker JSON response with one fact."""
+    return json.dumps(
+        {
+            "facts": [{"claim": "France's capital is Paris.", "sources": [1]}],
+            "answer": answer,
+        }
     )
-    return mock_llm
 
 
 # ---------------------------------------------------------------------------
@@ -56,35 +63,44 @@ def _make_two_call_mock_llm(plan_json: str, answer_text: str) -> MagicMock:
 
 
 def test_graph_endpoint_happy_path(monkeypatch):
-    """Valid query returns 200 with mode='graph', grounded answer, and sources."""
+    """Valid query returns 200 with mode='graph', grounded answer, sources, and facts."""
     expected_text = "France's capital is Paris. [1]"
-    mock_llm = _make_two_call_mock_llm(
-        '["What is the capital of France?"]', expected_text
+
+    planner_mock = MagicMock()
+    planner_mock.complete = AsyncMock(
+        return_value=_mock_llm_result('["What is the capital of France?"]')
     )
-    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: mock_llm)
+    fc_mock = MagicMock()
+    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(_fc_json(expected_text)))
+
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
     monkeypatch.setattr(
         "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
     )
-    monkeypatch.setattr("app.agents.searcher.get_llm_client", lambda: mock_llm)
+    monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
 
     response = client.post("/research/graph", json={"query": "what is the capital of France"})
 
     assert response.status_code == 200
-    data = ResearchResponse(**response.json())
-    assert data.mode == "graph"
-    assert data.answer == expected_text
-    assert data.elapsed_ms >= 0
-    assert len(data.sources) == 1
-    assert data.sources[0].title == "Graph Endpoint Source"
+    data = response.json()
+    assert data["mode"] == "graph"
+    assert data["answer"] == expected_text
+    assert data["elapsed_ms"] >= 0
+    assert len(data["sources"]) == 1
+    assert data["sources"][0]["title"] == "Graph Endpoint Source"
+    assert data["facts"] is not None
+    assert len(data["facts"]) == 1
+    assert data["facts"][0]["claim"] == "France's capital is Paris."
+    assert data["facts"][0]["sources"] == [1]
 
 
 def test_graph_endpoint_returns_503_on_search_failure(monkeypatch):
     """SearchUnavailableError from the searcher node is caught and returned as HTTP 503."""
-    plan_mock_llm = MagicMock()
-    plan_mock_llm.complete = AsyncMock(
+    plan_mock = MagicMock()
+    plan_mock.complete = AsyncMock(
         return_value=_mock_llm_result('["what is the capital of France"]')
     )
-    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: plan_mock_llm)
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: plan_mock)
     monkeypatch.setattr(
         "app.agents.searcher.search",
         AsyncMock(side_effect=SearchUnavailableError("Search service temporarily unavailable")),
@@ -108,21 +124,48 @@ def test_graph_endpoint_returns_503_on_llm_failure(monkeypatch):
     assert response.json()["detail"] == "Research service temporarily unavailable"
 
 
+def test_graph_endpoint_returns_503_on_fact_checker_llm_failure(monkeypatch):
+    """LLMUnavailableError from fact_checker is caught and returned as HTTP 503."""
+    plan_mock = MagicMock()
+    plan_mock.complete = AsyncMock(
+        return_value=_mock_llm_result('["what is the capital of France"]')
+    )
+    fc_mock = MagicMock()
+    fc_mock.complete = AsyncMock(side_effect=LLMUnavailableError("Both providers failed."))
+
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: plan_mock)
+    monkeypatch.setattr(
+        "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
+    )
+    monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
+
+    response = client.post("/research/graph", json={"query": "what is the capital of France"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Research service temporarily unavailable"
+
+
 def test_graph_endpoint_rejects_short_query():
     """Query shorter than 3 characters returns 422 (validation enforced before graph runs)."""
     response = client.post("/research/graph", json={"query": "hi"})
     assert response.status_code == 422
 
 
-def test_graph_endpoint_logs_plan_size(monkeypatch, caplog):
-    """Successful graph request emits a log line containing plan_size=N."""
+def test_graph_endpoint_logs_plan_size_and_facts_count(monkeypatch, caplog):
+    """Successful graph request emits a log line with plan_size=N and facts_count=N."""
     plan_json = '["What is the capital?", "Where is France located?"]'
-    mock_llm = _make_two_call_mock_llm(plan_json, "Paris is the capital of France. [1]")
-    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: mock_llm)
+    answer = "Paris is the capital of France. [1]"
+
+    planner_mock = MagicMock()
+    planner_mock.complete = AsyncMock(return_value=_mock_llm_result(plan_json))
+    fc_mock = MagicMock()
+    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(_fc_json(answer)))
+
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
     monkeypatch.setattr(
         "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
     )
-    monkeypatch.setattr("app.agents.searcher.get_llm_client", lambda: mock_llm)
+    monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
 
     with caplog.at_level(logging.INFO, logger="app.api.research"):
         response = client.post("/research/graph", json={"query": "what is the capital of France"})
@@ -130,3 +173,4 @@ def test_graph_endpoint_logs_plan_size(monkeypatch, caplog):
     assert response.status_code == 200
     log_messages = " ".join(r.message for r in caplog.records)
     assert "plan_size=2" in log_messages
+    assert "facts_count=1" in log_messages

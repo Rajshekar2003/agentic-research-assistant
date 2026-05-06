@@ -3,6 +3,10 @@
 # Day 4 done: Real LLM client (Groq primary, Gemini fallback).
 # Day 5 done: Tavily search → context-formatted prompt → grounded answer with [1]/[2] citations.
 # Day 6 done: POST /research/graph wraps the same pipeline in a single-node LangGraph graph.
+# Day 8 done: 2-node graph (planner → searcher).
+# Day 9 done: 3-node graph (planner → searcher → fact_checker); ResearchResponse exposes facts.
+# TODO Day 10: split fact_checker's synthesis into a dedicated writer node.
+# TODO Day 11: add critic with conditional edge back to writer.
 """
 
 import logging
@@ -12,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.graph.workflow import get_compiled_graph
 from app.llm.client import LLMUnavailableError, get_llm_client
-from app.schemas import ResearchRequest, ResearchResponse, Source
+from app.schemas import Fact, ResearchRequest, ResearchResponse, Source
 from app.tools.search import SearchUnavailableError, search
 
 router = APIRouter(prefix="/research")
@@ -123,13 +127,13 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
     """Run the query through the multi-agent LangGraph state machine.
 
     Invokes the compiled graph with the query and maps the resulting state
-    into a ResearchResponse.  The graph runs Planner → Searcher (Day 8),
-    with FactChecker, Writer, and Critic added on Days 9-11, enabling
-    apples-to-apples comparison against the baseline in Week 4 evals.
+    into a ResearchResponse.  The graph runs Planner → Searcher → FactChecker
+    (Day 9), enabling apples-to-apples comparison against the baseline in
+    Week 4 evals.
 
     # Day 8 done: 2-node graph (planner → searcher).
-    # TODO Day 9: add fact_checker between searcher and writer.
-    # TODO Day 10: split searcher's LLM call into a dedicated writer node.
+    # Day 9 done: 3-node graph (planner → searcher → fact_checker).
+    # TODO Day 10: split fact_checker's synthesis into a dedicated writer node.
     # TODO Day 11: add critic with conditional edge back to writer.
     # TODO Week 4: eval harness will hit this endpoint for graph-mode runs.
 
@@ -137,8 +141,8 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
         request: Validated research request containing the query string.
 
     Returns:
-        ResearchResponse with grounded answer, source list, wall-clock elapsed
-        time, and mode set to "graph".
+        ResearchResponse with grounded answer, source list, verified facts,
+        wall-clock elapsed time, and mode set to "graph".
 
     Raises:
         HTTPException: 503 if search is unavailable or both LLM providers fail.
@@ -155,9 +159,13 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
 
     elapsed_ms = int((time.perf_counter() - start) * 1000)
 
+    facts_raw = state.get("facts")
+    facts = [Fact(**f) for f in facts_raw] if facts_raw is not None else None
+
     logger.info(
         "Research graph complete: path=graph provider=%s model=%s "
-        "search_results_count=%d elapsed_ms=%d tokens_in=%s tokens_out=%s plan_size=%d",
+        "search_results_count=%d elapsed_ms=%d tokens_in=%s tokens_out=%s "
+        "plan_size=%d facts_count=%d",
         state.get("provider"),
         state.get("model"),
         len(state.get("search_results") or []),
@@ -165,6 +173,7 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
         state.get("tokens_in"),
         state.get("tokens_out"),
         len(state.get("plan") or []),
+        len(facts_raw or []),
     )
 
     return ResearchResponse(
@@ -172,4 +181,5 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
         sources=state["sources"],
         elapsed_ms=elapsed_ms,
         mode="graph",
+        facts=facts,
     )

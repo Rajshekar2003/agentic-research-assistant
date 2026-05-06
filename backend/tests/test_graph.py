@@ -1,5 +1,6 @@
-"""Tests for the LangGraph workflow — compiled graph and 2-node pipeline behaviour."""
+"""Tests for the LangGraph workflow — compiled graph and 3-node pipeline behaviour."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -49,19 +50,27 @@ def test_graph_compiles():
     assert g1 is g2
 
 
-async def test_graph_two_node_happy_path(monkeypatch):
-    """Planner + Searcher nodes together populate all expected state fields."""
+async def test_graph_three_node_happy_path(monkeypatch):
+    """Planner + Searcher + FactChecker nodes together populate all expected state fields."""
     expected_text = "The answer is 42. [1]"
-    # First complete() call → planner plan; second → searcher answer.
-    mock_llm = MagicMock()
-    mock_llm.complete = AsyncMock(
-        side_effect=[_mock_llm_result('["What is 42?"]'), _mock_llm_result(expected_text)]
+    fc_response = json.dumps(
+        {
+            "facts": [{"claim": "42 is the answer.", "sources": [1]}],
+            "answer": expected_text,
+        }
     )
-    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: mock_llm)
+
+    planner_mock = MagicMock()
+    planner_mock.complete = AsyncMock(return_value=_mock_llm_result('["What is 42?"]'))
+
+    fc_mock = MagicMock()
+    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(fc_response))
+
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
     monkeypatch.setattr(
         "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
     )
-    monkeypatch.setattr("app.agents.searcher.get_llm_client", lambda: mock_llm)
+    monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
 
     graph = get_compiled_graph()
     state = await graph.ainvoke({"query": "test query for graph"})
@@ -73,9 +82,10 @@ async def test_graph_two_node_happy_path(monkeypatch):
     assert state["model"] == "llama-3.3-70b-versatile"
     assert state["tokens_in"] == 10
     assert state["tokens_out"] == 20
-    assert isinstance(state.get("elapsed_ms"), int)
     assert state["plan"] == ["What is 42?"]
     assert len(state["search_results"]) == 1
+    assert len(state["facts"]) == 1
+    assert state["facts"][0]["claim"] == "42 is the answer."
 
 
 async def test_graph_propagates_search_failure(monkeypatch):
