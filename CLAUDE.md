@@ -33,15 +33,15 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 2 Day 9 complete. Multi-agent graph: Planner → Searcher → FactChecker (3 nodes). Searcher is now retrieval-only; FactChecker extracts verified claims with source attribution and synthesizes the final answer from those claims only. ResearchResponse now exposes a facts array with {claim, sources[]} for each verified statement. ~38 pytest tests passing. Day 10 will split FactChecker's synthesis into a dedicated Writer node.
+Week 2 Day 10 complete. Multi-agent graph: Planner → Searcher → FactChecker → Writer (4 nodes). FactChecker is now verification-only (extracts {claim, sources} pairs); Writer synthesizes the final answer from verified facts. When facts are empty, Writer skips the LLM and returns an honest "cannot verify" message. ~45 pytest tests passing. Day 11 adds Critic with conditional edge back to Writer.
 
 ## Architecture
 
-Current graph (Day 9): **3 nodes** — `planner` decomposes the query into 2-4 sub-questions; `searcher` runs Tavily per sub-question, deduplicates URLs globally (cap 8), retrieval-only; `fact_checker` extracts verified claims from search results and synthesizes the final answer.  The `mode` field in ResearchResponse (`"baseline"` | `"graph"`) lets the Week 4 eval harness compare both paths on the same HotpotQA queries.  The `facts` array exposes each verified claim with its supporting source IDs.
+Current graph (Day 10): **4 nodes** — `planner` decomposes the query into 2-4 sub-questions; `searcher` runs Tavily per sub-question, deduplicates URLs globally (cap 8), retrieval-only; `fact_checker` extracts verified {claim, sources} pairs from search results; `writer` synthesizes the final answer from verified facts only (skips LLM when facts are empty).  The `mode` field in ResearchResponse (`"baseline"` | `"graph"`) lets the Week 4 eval harness compare both paths on the same HotpotQA queries.  The `facts` array exposes each verified claim with its supporting source IDs.
 
 Current baseline (locked after Day 5): **Search (Tavily) → Generate (Groq w/ Gemini fallback)** — a single-pass RAG system, not multi-agent yet.  Served by POST /research; must not change.
 
-Week 2 target (multi-agent, for eval comparison): **5 nodes** in a LangGraph state machine: Planner → Searcher → FactChecker → Writer → Critic.  Day 10 splits FactChecker's synthesis into a dedicated Writer node (4 nodes); Day 11 adds Critic with conditional feedback loop (5 nodes).  Served by POST /research/graph.
+Week 2 target (multi-agent, for eval comparison): **5 nodes** in a LangGraph state machine: Planner → Searcher → FactChecker → Writer → Critic.  Day 11 adds Critic with conditional feedback loop (5 nodes).  Served by POST /research/graph.
 
 ## Known issues
 

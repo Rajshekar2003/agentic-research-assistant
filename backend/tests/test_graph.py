@@ -1,4 +1,4 @@
-"""Tests for the LangGraph workflow — compiled graph and 3-node pipeline behaviour."""
+"""Tests for the LangGraph workflow — compiled graph and 4-node pipeline behaviour."""
 
 import json
 from unittest.mock import AsyncMock, MagicMock
@@ -50,13 +50,12 @@ def test_graph_compiles():
     assert g1 is g2
 
 
-async def test_graph_three_node_happy_path(monkeypatch):
-    """Planner + Searcher + FactChecker nodes together populate all expected state fields."""
-    expected_text = "The answer is 42. [1]"
+async def test_graph_four_node_happy_path(monkeypatch):
+    """Planner + Searcher + FactChecker + Writer nodes together populate all expected state fields."""
+    expected_answer = "The answer is 42. [1]"
     fc_response = json.dumps(
         {
             "facts": [{"claim": "42 is the answer.", "sources": [1]}],
-            "answer": expected_text,
         }
     )
 
@@ -66,16 +65,20 @@ async def test_graph_three_node_happy_path(monkeypatch):
     fc_mock = MagicMock()
     fc_mock.complete = AsyncMock(return_value=_mock_llm_result(fc_response))
 
+    writer_mock = MagicMock()
+    writer_mock.complete = AsyncMock(return_value=_mock_llm_result(expected_answer))
+
     monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
     monkeypatch.setattr(
         "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
     )
     monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
+    monkeypatch.setattr("app.agents.writer.get_llm_client", lambda: writer_mock)
 
     graph = get_compiled_graph()
     state = await graph.ainvoke({"query": "test query for graph"})
 
-    assert state["final_answer"] == expected_text
+    assert state["final_answer"] == expected_answer
     assert len(state["sources"]) == 1
     assert state["sources"][0].title == "Graph Source"
     assert state["provider"] == "groq"

@@ -1,10 +1,9 @@
 """LangGraph workflow for the Agentic Research Assistant.
 
-Week 2 Day 9 — graph has 3 nodes: planner, searcher, fact_checker.
-  START → planner → searcher → fact_checker → END
+Week 2 Day 10 — graph has 4 nodes: planner, searcher, fact_checker, writer.
+  START → planner → searcher → fact_checker → writer → END
 
-  Day 10 splits FactChecker's synthesis into a dedicated writer node (4 nodes).
-  Day 11 adds critic with conditional edge back to writer (5 nodes).
+  Day 11 adds Critic with conditional edge back to Writer (capped at 2 revisions).
 
 The compiled graph is exposed via get_compiled_graph() (lru_cache singleton) and
 as the module-level compiled_graph variable for direct import access.
@@ -17,6 +16,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents import planner, searcher
 from app.agents.fact_checker import run as fact_checker_run
+from app.agents.writer import run as writer_run
 from app.graph.state import ResearchState
 
 logger = logging.getLogger(__name__)
@@ -37,10 +37,12 @@ def get_compiled_graph():
     builder.add_node("planner", planner.run)
     builder.add_node("searcher", searcher.run)
     builder.add_node("fact_checker", fact_checker_run)
+    builder.add_node("writer", writer_run)
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "searcher")
     builder.add_edge("searcher", "fact_checker")
-    builder.add_edge("fact_checker", END)
+    builder.add_edge("fact_checker", "writer")
+    builder.add_edge("writer", END)
     return builder.compile()
 
 

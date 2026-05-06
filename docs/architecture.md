@@ -167,7 +167,7 @@ The graph line includes `path=graph` for log filtering by mode. The baseline lin
 
 ---
 
-## Repo layout
+## Repo layout 
 
 ```
 agentic-research-assistant/

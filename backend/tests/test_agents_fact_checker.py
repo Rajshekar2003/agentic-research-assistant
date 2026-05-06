@@ -1,4 +1,8 @@
-"""Tests for the FactChecker agent (app/agents/fact_checker.py)."""
+"""Tests for the FactChecker agent (app/agents/fact_checker.py).
+
+As of Day 10, FactChecker is verification-only: run() returns a 'facts' list but
+does NOT set 'final_answer'. That responsibility belongs to Writer.
+"""
 
 import json
 import logging
@@ -54,14 +58,13 @@ def _make_mock_llm(response_text: str) -> MagicMock:
 
 
 async def test_fact_checker_extracts_valid_facts(monkeypatch):
-    """Well-formed LLM JSON → facts list populated, final_answer set, telemetry present."""
+    """Well-formed LLM JSON → facts list populated, telemetry present, no final_answer set."""
     fc_json = json.dumps(
         {
             "facts": [
                 {"claim": "Paris is the capital of France.", "sources": [1]},
                 {"claim": "France is in Western Europe.", "sources": [1, 2]},
             ],
-            "answer": "Paris is the capital of France. [1] France is in Western Europe. [1][2]",
         }
     )
     monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: _make_mock_llm(fc_json))
@@ -72,7 +75,8 @@ async def test_fact_checker_extracts_valid_facts(monkeypatch):
     assert result["facts"][0]["claim"] == "Paris is the capital of France."
     assert result["facts"][0]["sources"] == [1]
     assert result["facts"][1]["sources"] == [1, 2]
-    assert "Paris" in result["final_answer"]
+    # Writer is responsible for final_answer — FactChecker must not set it.
+    assert "final_answer" not in result
     assert result["provider"] == "groq"
     assert result["model"] == "llama-3.3-70b-versatile"
     assert result["tokens_in"] == 200
@@ -80,7 +84,7 @@ async def test_fact_checker_extracts_valid_facts(monkeypatch):
 
 
 async def test_fact_checker_falls_back_on_invalid_json(monkeypatch, caplog):
-    """Non-JSON LLM response → empty facts, fallback answer, WARNING logged."""
+    """Non-JSON LLM response → empty facts, no final_answer, WARNING logged."""
     monkeypatch.setattr(
         "app.agents.fact_checker.get_llm_client", lambda: _make_mock_llm("not json at all")
     )
@@ -89,14 +93,12 @@ async def test_fact_checker_falls_back_on_invalid_json(monkeypatch, caplog):
         result = await fact_checker_run(_make_state())
 
     assert result["facts"] == []
-    assert result["final_answer"] == (
-        "I couldn't verify any claims from the available sources for this question."
-    )
+    assert "final_answer" not in result
     assert any("JSON parse failure" in r.message for r in caplog.records)
 
 
 async def test_fact_checker_falls_back_on_schema_mismatch(monkeypatch, caplog):
-    """Valid JSON but missing required 'facts' key → empty facts, fallback answer, WARNING."""
+    """Valid JSON but missing required 'facts' key → empty facts, no final_answer, WARNING."""
     bad_json = json.dumps({"answer": "Some answer without facts key."})
     monkeypatch.setattr(
         "app.agents.fact_checker.get_llm_client", lambda: _make_mock_llm(bad_json)
@@ -106,9 +108,7 @@ async def test_fact_checker_falls_back_on_schema_mismatch(monkeypatch, caplog):
         result = await fact_checker_run(_make_state())
 
     assert result["facts"] == []
-    assert result["final_answer"] == (
-        "I couldn't verify any claims from the available sources for this question."
-    )
+    assert "final_answer" not in result
     assert any("schema mismatch" in r.message for r in caplog.records)
 
 
@@ -123,7 +123,6 @@ async def test_fact_checker_drops_malformed_facts_keeps_valid_ones(monkeypatch):
                 {"claim": "Non-int sources.", "sources": ["one"]},  # non-int sources
                 {"claim": "Another valid fact.", "sources": [2]},
             ],
-            "answer": "Some answer.",
         }
     )
     monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: _make_mock_llm(fc_json))
@@ -148,7 +147,6 @@ async def test_fact_checker_filters_out_of_range_source_ids(monkeypatch):
                 # fully in-range fact
                 {"claim": "Good fact.", "sources": [1, 3]},
             ],
-            "answer": "Answer citing non-existent source [9].",
         }
     )
     monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: _make_mock_llm(fc_json))

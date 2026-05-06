@@ -5,7 +5,7 @@
 # Day 6 done: POST /research/graph wraps the same pipeline in a single-node LangGraph graph.
 # Day 8 done: 2-node graph (planner → searcher).
 # Day 9 done: 3-node graph (planner → searcher → fact_checker); ResearchResponse exposes facts.
-# TODO Day 10: split fact_checker's synthesis into a dedicated writer node.
+# Day 10 done: 4-node graph; fact_checker is verification-only; writer synthesizes final answer.
 # TODO Day 11: add critic with conditional edge back to writer.
 """
 
@@ -127,13 +127,14 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
     """Run the query through the multi-agent LangGraph state machine.
 
     Invokes the compiled graph with the query and maps the resulting state
-    into a ResearchResponse.  The graph runs Planner → Searcher → FactChecker
-    (Day 9), enabling apples-to-apples comparison against the baseline in
-    Week 4 evals.
+    into a ResearchResponse.  The graph runs Planner → Searcher → FactChecker →
+    Writer (Day 10), enabling apples-to-apples comparison against the baseline in
+    Week 4 evals.  LLM telemetry in the log line reflects the Writer node, which is
+    the last LLM call (state fields are last-write-wins across nodes).
 
     # Day 8 done: 2-node graph (planner → searcher).
     # Day 9 done: 3-node graph (planner → searcher → fact_checker).
-    # TODO Day 10: split fact_checker's synthesis into a dedicated writer node.
+    # Day 10 done: 4-node graph; writer synthesizes final answer from verified facts.
     # TODO Day 11: add critic with conditional edge back to writer.
     # TODO Week 4: eval harness will hit this endpoint for graph-mode runs.
 
