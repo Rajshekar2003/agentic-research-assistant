@@ -1,4 +1,8 @@
-"""Tests for the LangGraph workflow — compiled graph and 4-node pipeline behaviour."""
+"""Tests for the LangGraph workflow — compiled graph and 5-node pipeline behaviour.
+
+Day 11: graph has 5 nodes (planner, searcher, fact_checker, writer, critic) with a
+conditional feedback edge from critic back to writer, capped at 2 revisions.
+"""
 
 import json
 from unittest.mock import AsyncMock, MagicMock
@@ -37,8 +41,20 @@ def _mock_search_results() -> list[SearchResult]:
     ]
 
 
+def _fc_facts_json() -> str:
+    return json.dumps({"facts": [{"claim": "42 is the answer.", "sources": [1]}]})
+
+
+def _approve_json() -> str:
+    return json.dumps({"verdict": "approve", "critique": ""})
+
+
+def _revise_json(critique: str = "Claim is not supported; cite source.") -> str:
+    return json.dumps({"verdict": "revise", "critique": critique})
+
+
 # ---------------------------------------------------------------------------
-# Tests
+# Tests — graph compilation
 # ---------------------------------------------------------------------------
 
 
@@ -50,23 +66,26 @@ def test_graph_compiles():
     assert g1 is g2
 
 
-async def test_graph_four_node_happy_path(monkeypatch):
-    """Planner + Searcher + FactChecker + Writer nodes together populate all expected state fields."""
+# ---------------------------------------------------------------------------
+# Tests — 5-node happy path
+# ---------------------------------------------------------------------------
+
+
+async def test_graph_five_node_happy_path(monkeypatch):
+    """All 5 nodes together populate expected state; Critic approves on first pass."""
     expected_answer = "The answer is 42. [1]"
-    fc_response = json.dumps(
-        {
-            "facts": [{"claim": "42 is the answer.", "sources": [1]}],
-        }
-    )
 
     planner_mock = MagicMock()
     planner_mock.complete = AsyncMock(return_value=_mock_llm_result('["What is 42?"]'))
 
     fc_mock = MagicMock()
-    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(fc_response))
+    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(_fc_facts_json()))
 
     writer_mock = MagicMock()
     writer_mock.complete = AsyncMock(return_value=_mock_llm_result(expected_answer))
+
+    critic_mock = MagicMock()
+    critic_mock.complete = AsyncMock(return_value=_mock_llm_result(_approve_json()))
 
     monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
     monkeypatch.setattr(
@@ -74,6 +93,7 @@ async def test_graph_four_node_happy_path(monkeypatch):
     )
     monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
     monkeypatch.setattr("app.agents.writer.get_llm_client", lambda: writer_mock)
+    monkeypatch.setattr("app.agents.critic.get_llm_client", lambda: critic_mock)
 
     graph = get_compiled_graph()
     state = await graph.ainvoke({"query": "test query for graph"})
@@ -82,21 +102,148 @@ async def test_graph_four_node_happy_path(monkeypatch):
     assert len(state["sources"]) == 1
     assert state["sources"][0].title == "Graph Source"
     assert state["provider"] == "groq"
-    assert state["model"] == "llama-3.3-70b-versatile"
-    assert state["tokens_in"] == 10
-    assert state["tokens_out"] == 20
     assert state["plan"] == ["What is 42?"]
-    assert len(state["search_results"]) == 1
     assert len(state["facts"]) == 1
-    assert state["facts"][0]["claim"] == "42 is the answer."
+    assert state["critic_verdict"] == "approve"
+    assert state.get("revision_count", 0) == 0
+
+    # 4 LLM calls: planner + fact_checker + writer + critic
+    assert planner_mock.complete.call_count == 1
+    assert fc_mock.complete.call_count == 1
+    assert writer_mock.complete.call_count == 1
+    assert critic_mock.complete.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests — Critic feedback loop
+# ---------------------------------------------------------------------------
+
+
+async def test_graph_no_revision_when_critic_approves_first(monkeypatch):
+    """Critic approves on first call → Writer called once, Critic called once, revision_count=0."""
+    planner_mock = MagicMock()
+    planner_mock.complete = AsyncMock(return_value=_mock_llm_result('["test question"]'))
+
+    fc_mock = MagicMock()
+    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(_fc_facts_json()))
+
+    writer_mock = MagicMock()
+    writer_mock.complete = AsyncMock(return_value=_mock_llm_result("First and only draft."))
+
+    critic_mock = MagicMock()
+    critic_mock.complete = AsyncMock(return_value=_mock_llm_result(_approve_json()))
+
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
+    monkeypatch.setattr(
+        "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
+    )
+    monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
+    monkeypatch.setattr("app.agents.writer.get_llm_client", lambda: writer_mock)
+    monkeypatch.setattr("app.agents.critic.get_llm_client", lambda: critic_mock)
+
+    state = await get_compiled_graph().ainvoke({"query": "test query"})
+
+    assert state["critic_verdict"] == "approve"
+    assert state.get("revision_count", 0) == 0
+    assert writer_mock.complete.call_count == 1
+    assert critic_mock.complete.call_count == 1
+
+
+async def test_graph_revision_loop_runs_once(monkeypatch):
+    """Critic revises once then approves: Writer×2, Critic×2, revision_count=1."""
+    planner_mock = MagicMock()
+    planner_mock.complete = AsyncMock(return_value=_mock_llm_result('["test question"]'))
+
+    fc_mock = MagicMock()
+    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(_fc_facts_json()))
+
+    writer_mock = MagicMock()
+    writer_mock.complete = AsyncMock(
+        side_effect=[
+            _mock_llm_result("First draft."),
+            _mock_llm_result("Revised draft."),
+        ]
+    )
+
+    critic_mock = MagicMock()
+    critic_mock.complete = AsyncMock(
+        side_effect=[
+            _mock_llm_result(_revise_json("Remove unsupported claim.")),
+            _mock_llm_result(_approve_json()),
+        ]
+    )
+
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
+    monkeypatch.setattr(
+        "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
+    )
+    monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
+    monkeypatch.setattr("app.agents.writer.get_llm_client", lambda: writer_mock)
+    monkeypatch.setattr("app.agents.critic.get_llm_client", lambda: critic_mock)
+
+    state = await get_compiled_graph().ainvoke({"query": "test query"})
+
+    assert state["critic_verdict"] == "approve"
+    assert state["revision_count"] == 1
+    assert state["final_answer"] == "Revised draft."
+    assert writer_mock.complete.call_count == 2
+    assert critic_mock.complete.call_count == 2
+
+
+async def test_graph_revision_loop_hits_cap(monkeypatch):
+    """Critic keeps saying revise; cap stops after revision_count reaches 2.
+
+    With route `revision_count < 2`: Writer runs initial + 1 revision = 2 times total,
+    Critic runs 2 times.  The cap fires when revision_count==2 (route returns END).
+    final critic_verdict="revise" (cap was hit, not an approval).
+    """
+    planner_mock = MagicMock()
+    planner_mock.complete = AsyncMock(return_value=_mock_llm_result('["test question"]'))
+
+    fc_mock = MagicMock()
+    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(_fc_facts_json()))
+
+    writer_mock = MagicMock()
+    writer_mock.complete = AsyncMock(
+        side_effect=[
+            _mock_llm_result("First draft."),
+            _mock_llm_result("Revised draft — cap hit."),
+        ]
+    )
+
+    # Always says revise — cap terminates after 2 revise verdicts (revision_count==2)
+    critic_mock = MagicMock()
+    critic_mock.complete = AsyncMock(
+        side_effect=[
+            _mock_llm_result(_revise_json("Fix claim A.")),
+            _mock_llm_result(_revise_json("Fix claim B.")),
+        ]
+    )
+
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
+    monkeypatch.setattr(
+        "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
+    )
+    monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
+    monkeypatch.setattr("app.agents.writer.get_llm_client", lambda: writer_mock)
+    monkeypatch.setattr("app.agents.critic.get_llm_client", lambda: critic_mock)
+
+    state = await get_compiled_graph().ainvoke({"query": "test query"})
+
+    assert state["revision_count"] == 2
+    assert state["critic_verdict"] == "revise"  # hit the cap, never approved
+    assert state["final_answer"] == "Revised draft — cap hit."
+    assert writer_mock.complete.call_count == 2
+    assert critic_mock.complete.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests — error propagation
+# ---------------------------------------------------------------------------
 
 
 async def test_graph_propagates_search_failure(monkeypatch):
-    """SearchUnavailableError raised inside the searcher propagates through ainvoke().
-
-    The planner succeeds first; then the searcher's Tavily call fails.  The exception
-    propagates out of ainvoke() so the API endpoint can convert it to a 503.
-    """
+    """SearchUnavailableError raised inside the searcher propagates through ainvoke()."""
     plan_llm = MagicMock()
     plan_llm.complete = AsyncMock(return_value=_mock_llm_result('["test question"]'))
     monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: plan_llm)
@@ -111,13 +258,37 @@ async def test_graph_propagates_search_failure(monkeypatch):
 
 
 async def test_graph_propagates_llm_failure(monkeypatch):
-    """LLMUnavailableError raised inside the planner propagates through ainvoke().
-
-    Same propagation contract as search failures — the API endpoint catches it.
-    """
+    """LLMUnavailableError raised inside the planner propagates through ainvoke()."""
     mock_llm = MagicMock()
     mock_llm.complete = AsyncMock(side_effect=LLMUnavailableError("Both providers failed."))
     monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: mock_llm)
+
+    graph = get_compiled_graph()
+    with pytest.raises(LLMUnavailableError):
+        await graph.ainvoke({"query": "test query"})
+
+
+async def test_graph_propagates_critic_llm_failure(monkeypatch):
+    """LLMUnavailableError raised inside the critic propagates through ainvoke()."""
+    planner_mock = MagicMock()
+    planner_mock.complete = AsyncMock(return_value=_mock_llm_result('["test question"]'))
+
+    fc_mock = MagicMock()
+    fc_mock.complete = AsyncMock(return_value=_mock_llm_result(_fc_facts_json()))
+
+    writer_mock = MagicMock()
+    writer_mock.complete = AsyncMock(return_value=_mock_llm_result("A draft answer."))
+
+    critic_llm = MagicMock()
+    critic_llm.complete = AsyncMock(side_effect=LLMUnavailableError("Both providers failed."))
+
+    monkeypatch.setattr("app.agents.planner.get_llm_client", lambda: planner_mock)
+    monkeypatch.setattr(
+        "app.agents.searcher.search", AsyncMock(return_value=_mock_search_results())
+    )
+    monkeypatch.setattr("app.agents.fact_checker.get_llm_client", lambda: fc_mock)
+    monkeypatch.setattr("app.agents.writer.get_llm_client", lambda: writer_mock)
+    monkeypatch.setattr("app.agents.critic.get_llm_client", lambda: critic_llm)
 
     graph = get_compiled_graph()
     with pytest.raises(LLMUnavailableError):

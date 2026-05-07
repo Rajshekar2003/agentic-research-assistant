@@ -6,7 +6,8 @@
 # Day 8 done: 2-node graph (planner → searcher).
 # Day 9 done: 3-node graph (planner → searcher → fact_checker); ResearchResponse exposes facts.
 # Day 10 done: 4-node graph; fact_checker is verification-only; writer synthesizes final answer.
-# TODO Day 11: add critic with conditional edge back to writer.
+# Day 11 done: 5-node graph; Critic with conditional feedback loop back to Writer (capped at 2).
+# TODO Days 12-13: stress test, parallelize Searcher's Tavily calls, tune prompts.
 """
 
 import logging
@@ -126,16 +127,13 @@ async def run_research(request: ResearchRequest) -> ResearchResponse:
 async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
     """Run the query through the multi-agent LangGraph state machine.
 
-    Invokes the compiled graph with the query and maps the resulting state
-    into a ResearchResponse.  The graph runs Planner → Searcher → FactChecker →
-    Writer (Day 10), enabling apples-to-apples comparison against the baseline in
-    Week 4 evals.  LLM telemetry in the log line reflects the Writer node, which is
-    the last LLM call (state fields are last-write-wins across nodes).
+    Invokes the compiled 5-node graph (Planner → Searcher → FactChecker → Writer → Critic)
+    with the query and maps the resulting state into a ResearchResponse.  The Critic may
+    route back to Writer up to 2 times; the revision loop is transparent to callers except
+    for the critic_verdict and revisions fields in the response.  LLM telemetry in the log
+    line reflects the last Writer node call (state fields are last-write-wins).
 
-    # Day 8 done: 2-node graph (planner → searcher).
-    # Day 9 done: 3-node graph (planner → searcher → fact_checker).
-    # Day 10 done: 4-node graph; writer synthesizes final answer from verified facts.
-    # TODO Day 11: add critic with conditional edge back to writer.
+    # Day 11 done: 5-node graph; Critic with conditional feedback loop capped at 2 revisions.
     # TODO Week 4: eval harness will hit this endpoint for graph-mode runs.
 
     Args:
@@ -143,7 +141,7 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
 
     Returns:
         ResearchResponse with grounded answer, source list, verified facts,
-        wall-clock elapsed time, and mode set to "graph".
+        critic verdict, revision count, wall-clock elapsed time, and mode="graph".
 
     Raises:
         HTTPException: 503 if search is unavailable or both LLM providers fail.
@@ -162,11 +160,13 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
 
     facts_raw = state.get("facts")
     facts = [Fact(**f) for f in facts_raw] if facts_raw is not None else None
+    critic_verdict = state.get("critic_verdict")
+    revisions = state.get("revision_count", 0)
 
     logger.info(
         "Research graph complete: path=graph provider=%s model=%s "
         "search_results_count=%d elapsed_ms=%d tokens_in=%s tokens_out=%s "
-        "plan_size=%d facts_count=%d",
+        "plan_size=%d facts_count=%d critic_verdict=%s revisions=%d",
         state.get("provider"),
         state.get("model"),
         len(state.get("search_results") or []),
@@ -175,6 +175,8 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
         state.get("tokens_out"),
         len(state.get("plan") or []),
         len(facts_raw or []),
+        critic_verdict,
+        revisions,
     )
 
     return ResearchResponse(
@@ -183,4 +185,6 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
         elapsed_ms=elapsed_ms,
         mode="graph",
         facts=facts,
+        critic_verdict=critic_verdict,
+        revisions=revisions,
     )

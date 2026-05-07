@@ -33,15 +33,15 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 2 Day 10 complete. Multi-agent graph: Planner → Searcher → FactChecker → Writer (4 nodes). FactChecker is now verification-only (extracts {claim, sources} pairs); Writer synthesizes the final answer from verified facts. When facts are empty, Writer skips the LLM and returns an honest "cannot verify" message. ~45 pytest tests passing. Day 11 adds Critic with conditional edge back to Writer.
+Week 2 Day 11 complete — multi-agent graph fully wired: Planner → Searcher → FactChecker → Writer → Critic with conditional feedback edge back to Writer (capped at 2 revisions). Critic falls back to approve on JSON/validation failures (safety: never infinite-loop); LLMUnavailableError propagates to endpoint as 503. ResearchResponse exposes `critic_verdict` and `revisions` count. 64 pytest tests passing including revision loop and Critic unit tests. Days 12-13 will stress test, parallelize Searcher's Tavily calls, and run a smoke eval.
 
 ## Architecture
 
-Current graph (Day 10): **4 nodes** — `planner` decomposes the query into 2-4 sub-questions; `searcher` runs Tavily per sub-question, deduplicates URLs globally (cap 8), retrieval-only; `fact_checker` extracts verified {claim, sources} pairs from search results; `writer` synthesizes the final answer from verified facts only (skips LLM when facts are empty).  The `mode` field in ResearchResponse (`"baseline"` | `"graph"`) lets the Week 4 eval harness compare both paths on the same HotpotQA queries.  The `facts` array exposes each verified claim with its supporting source IDs.
+Current graph (Day 11): **5 nodes** — `planner` decomposes query into 2-4 sub-questions; `searcher` runs Tavily per sub-question, deduplicates URLs globally (cap 8); `fact_checker` extracts verified {claim, sources} pairs; `writer` synthesizes final answer (revision-aware: uses different system prompt + previous draft + critique on revision passes); `critic` evaluates draft against verified facts and routes: approve → END, revise (revision_count < 2) → writer, revise (revision_count ≥ 2) → END (hard cap). `revision_count` is incremented ONLY by Critic on "revise" verdicts.
 
 Current baseline (locked after Day 5): **Search (Tavily) → Generate (Groq w/ Gemini fallback)** — a single-pass RAG system, not multi-agent yet.  Served by POST /research; must not change.
 
-Week 2 target (multi-agent, for eval comparison): **5 nodes** in a LangGraph state machine: Planner → Searcher → FactChecker → Writer → Critic.  Day 11 adds Critic with conditional feedback loop (5 nodes).  Served by POST /research/graph.
+Week 2 target (multi-agent, for eval comparison): **5 nodes** — DEPLOYED Day 11.  Days 12-14 are tuning, parallelization, smoke eval, and Week 2 retro.  Served by POST /research/graph.
 
 ## Known issues
 

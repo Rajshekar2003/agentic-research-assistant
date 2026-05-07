@@ -73,6 +73,11 @@ class ResearchResponse(BaseModel):
         mode: Which pipeline path produced this response.
         facts: Verified claims with source attribution; None for the baseline endpoint.
                Only the graph endpoint populates this field (Day 9+).
+        critic_verdict: Final Critic verdict ("approve" or "revise"); None for baseline.
+                        "revise" means the hard cap was hit — Writer's last attempt is
+                        returned as-is. Populated by the graph endpoint (Day 11+).
+        revisions: Number of times Writer revised the answer (0 = approved on first pass).
+                   None for the baseline endpoint. Useful for Week 4 eval analysis.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True, populate_by_name=True)
@@ -82,6 +87,8 @@ class ResearchResponse(BaseModel):
     elapsed_ms: int = Field(..., ge=0)
     mode: Literal["baseline", "graph"] = "baseline"
     facts: list[Fact] | None = None
+    critic_verdict: Literal["approve", "revise"] | None = None
+    revisions: int | None = None
 
 
 class HealthResponse(BaseModel):
