@@ -2,8 +2,13 @@
 
 Day 9: Searcher is retrieval-only — it no longer calls the LLM. Tests reflect this:
 LLM helpers are removed and test_searcher_does_not_call_llm verifies the invariant.
+
+Day 12: Parallel execution tests verify that sub-question Tavily calls run concurrently
+(wall-clock timing), that a single search failure propagates through gather, and that the
+20s overall gather timeout raises SearchUnavailableError.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -133,4 +138,60 @@ async def test_searcher_propagates_search_failure(monkeypatch):
 
     state = {"query": "some query", "plan": ["some query"]}
     with pytest.raises(SearchUnavailableError):
+        await searcher_run(state)
+
+
+# ---------------------------------------------------------------------------
+# Day 12: Parallelisation tests
+# ---------------------------------------------------------------------------
+
+
+async def test_searcher_runs_calls_concurrently_not_sequentially(monkeypatch):
+    """3 sub-questions each sleeping 0.5s complete in <1.0s total (parallel, not ~1.5s sequential)."""
+
+    async def _slow_search(query, *, max_results):
+        await asyncio.sleep(0.5)
+        return [_mock_search_result(f"https://example.com/{query.replace(' ', '-')}")]
+
+    monkeypatch.setattr("app.agents.searcher.search", _slow_search)
+
+    state = {"query": "parallelism test", "plan": ["q1", "q2", "q3"]}
+    t0 = asyncio.get_event_loop().time()
+    await searcher_run(state)
+    elapsed = asyncio.get_event_loop().time() - t0
+
+    assert elapsed < 1.0, f"Expected parallel execution (<1.0s), got {elapsed:.2f}s"
+
+
+async def test_searcher_propagates_first_search_failure_in_gather(monkeypatch):
+    """SearchUnavailableError on the second of 3 concurrent calls propagates out of gather."""
+    results_q1 = [_mock_search_result("https://example.com/1")]
+    results_q3 = [_mock_search_result("https://example.com/3")]
+
+    mock_search = AsyncMock(
+        side_effect=[
+            results_q1,
+            SearchUnavailableError("Tavily failed on second call"),
+            results_q3,
+        ]
+    )
+    monkeypatch.setattr("app.agents.searcher.search", mock_search)
+
+    state = {"query": "failure propagation test", "plan": ["q1", "q2", "q3"]}
+    with pytest.raises(SearchUnavailableError):
+        await searcher_run(state)
+
+
+async def test_searcher_overall_timeout(monkeypatch):
+    """asyncio.wait_for fires when all searches hang, raising SearchUnavailableError."""
+
+    async def _hanging_search(query, *, max_results):
+        await asyncio.sleep(5.0)  # longer than the patched timeout
+        return []
+
+    monkeypatch.setattr("app.agents.searcher.search", _hanging_search)
+    monkeypatch.setattr("app.agents.searcher._GATHER_TIMEOUT_SECONDS", 0.1)
+
+    state = {"query": "timeout test", "plan": ["q1"]}
+    with pytest.raises(SearchUnavailableError, match="timed out"):
         await searcher_run(state)

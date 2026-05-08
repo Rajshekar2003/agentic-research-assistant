@@ -33,7 +33,7 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 2 Day 11 complete — multi-agent graph fully wired: Planner → Searcher → FactChecker → Writer → Critic with conditional feedback edge back to Writer (capped at 2 revisions). Critic falls back to approve on JSON/validation failures (safety: never infinite-loop); LLMUnavailableError propagates to endpoint as 503. ResearchResponse exposes `critic_verdict` and `revisions` count. 64 pytest tests passing including revision loop and Critic unit tests. Days 12-13 will stress test, parallelize Searcher's Tavily calls, and run a smoke eval.
+Week 2 Day 12 complete — Searcher's per-sub-question Tavily calls now run in parallel via `asyncio.gather`, cutting average latency on multi-subquestion queries from ~9-12s to ~4-6s. Per-search 15s `asyncio.wait_for` cap retained; gather has a 20s overall cap. Both endpoints have a top-level timeout (30s baseline, 60s graph) returning HTTP 504 on timeout — distinct from 503 (service unavailable). Critic prompt unchanged pending live calibration. 69 pytest tests passing.
 
 ## Architecture
 

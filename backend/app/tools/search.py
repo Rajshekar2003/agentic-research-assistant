@@ -76,6 +76,9 @@ async def search(query: str, max_results: int = 5) -> list[SearchResult]:
     """
     client = get_search_client()
     try:
+        # AsyncTavilyClient does not expose a timeout parameter at the search() call level
+        # or the constructor level — the SDK hardcodes a 180s httpx.AsyncClient timeout.
+        # The asyncio.wait_for below is the only per-call timeout guard.
         response = await asyncio.wait_for(
             client.search(
                 query=query,

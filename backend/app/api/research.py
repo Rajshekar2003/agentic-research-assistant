@@ -7,9 +7,11 @@
 # Day 9 done: 3-node graph (planner → searcher → fact_checker); ResearchResponse exposes facts.
 # Day 10 done: 4-node graph; fact_checker is verification-only; writer synthesizes final answer.
 # Day 11 done: 5-node graph; Critic with conditional feedback loop back to Writer (capped at 2).
-# TODO Days 12-13: stress test, parallelize Searcher's Tavily calls, tune prompts.
+# Day 12 done: Both endpoints have top-level timeouts (30s baseline, 60s graph) returning 504.
+#              Searcher parallelises Tavily calls via asyncio.gather (latency win).
 """
 
+import asyncio
 import logging
 import time
 
@@ -22,6 +24,14 @@ from app.tools.search import SearchUnavailableError, search
 
 router = APIRouter(prefix="/research")
 logger = logging.getLogger(__name__)
+
+# 504 timeout taxonomy:
+#   _BASELINE_TIMEOUT_SECONDS — cap for the single-pass RAG pipeline (search + LLM).
+#   _GRAPH_TIMEOUT_SECONDS    — cap for the full 5-node graph (worst case: 2 revision
+#                               loops × Writer + Critic + Planner + Searcher + FactChecker).
+# These are distinct from 503 (provider unavailable) — 504 means our pipeline ran too long.
+_BASELINE_TIMEOUT_SECONDS = 30.0
+_GRAPH_TIMEOUT_SECONDS = 60.0
 
 _SYSTEM_PROMPT = (
     "You are a research assistant. Answer the user's question using ONLY the numbered sources "
@@ -54,10 +64,6 @@ def _build_context(results: list) -> str:
 async def run_research(request: ResearchRequest) -> ResearchResponse:
     """Run the RAG baseline: search → ground prompt → generate grounded answer.
 
-    # Day 4 done: Real LLM client (Groq primary, Gemini fallback).
-    # Day 5 done: Tavily search → context-formatted prompt → grounded answer.
-    # Day 6 TODO: LangGraph wrapping for multi-agent eval comparison.
-
     Args:
         request: Validated research request containing the query string.
 
@@ -67,28 +73,44 @@ async def run_research(request: ResearchRequest) -> ResearchResponse:
 
     Raises:
         HTTPException: 503 if search is unavailable or both LLM providers fail.
+                       504 if the pipeline exceeds _BASELINE_TIMEOUT_SECONDS.
     """
     start = time.perf_counter()
     logger.info("Research query received: %.100s", request.query)
 
-    # --- Search (must succeed — 503 on failure preserves baseline grounding) ---
-    search_start = time.perf_counter()
-    try:
-        results = await search(request.query, max_results=5)
-    except SearchUnavailableError:
-        raise HTTPException(status_code=503, detail="Search service temporarily unavailable")
-    search_latency_ms = int((time.perf_counter() - search_start) * 1000)
+    async def _run_pipeline() -> tuple:
+        # --- Search (must succeed — 503 on failure preserves baseline grounding) ---
+        search_start = time.perf_counter()
+        try:
+            results = await search(request.query, max_results=5)
+        except SearchUnavailableError:
+            raise HTTPException(status_code=503, detail="Search service temporarily unavailable")
+        search_latency_ms = int((time.perf_counter() - search_start) * 1000)
 
-    # --- Build grounded prompt ---
-    context = _build_context(results)
-    user_prompt = f"{context}\n\nQuestion: {request.query}"
+        # --- Build grounded prompt ---
+        context = _build_context(results)
+        user_prompt = f"{context}\n\nQuestion: {request.query}"
 
-    # --- LLM generation ---
-    llm = get_llm_client()
+        # --- LLM generation ---
+        llm = get_llm_client()
+        try:
+            result = await llm.complete(_SYSTEM_PROMPT, user_prompt)
+        except LLMUnavailableError:
+            raise HTTPException(status_code=503, detail="Research service temporarily unavailable")
+
+        return results, result, search_latency_ms
+
     try:
-        result = await llm.complete(_SYSTEM_PROMPT, user_prompt)
-    except LLMUnavailableError:
-        raise HTTPException(status_code=503, detail="Research service temporarily unavailable")
+        results, result, search_latency_ms = await asyncio.wait_for(
+            _run_pipeline(), timeout=_BASELINE_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Baseline endpoint exceeded %.0fs, aborting", _BASELINE_TIMEOUT_SECONDS
+        )
+        raise HTTPException(
+            status_code=504, detail="Research took too long; try a simpler question"
+        )
 
     total_elapsed_ms = int((time.perf_counter() - start) * 1000)
 
@@ -133,9 +155,6 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
     for the critic_verdict and revisions fields in the response.  LLM telemetry in the log
     line reflects the last Writer node call (state fields are last-write-wins).
 
-    # Day 11 done: 5-node graph; Critic with conditional feedback loop capped at 2 revisions.
-    # TODO Week 4: eval harness will hit this endpoint for graph-mode runs.
-
     Args:
         request: Validated research request containing the query string.
 
@@ -145,12 +164,23 @@ async def run_research_graph(request: ResearchRequest) -> ResearchResponse:
 
     Raises:
         HTTPException: 503 if search is unavailable or both LLM providers fail.
+                       504 if the graph exceeds _GRAPH_TIMEOUT_SECONDS.
     """
     start = time.perf_counter()
     logger.info("Research graph query received: %.100s path=graph", request.query)
 
     try:
-        state = await get_compiled_graph().ainvoke({"query": request.query})
+        state = await asyncio.wait_for(
+            get_compiled_graph().ainvoke({"query": request.query}),
+            timeout=_GRAPH_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Graph endpoint exceeded %.0fs, aborting", _GRAPH_TIMEOUT_SECONDS
+        )
+        raise HTTPException(
+            status_code=504, detail="Research took too long; try a simpler question"
+        )
     except SearchUnavailableError:
         raise HTTPException(status_code=503, detail="Search service temporarily unavailable")
     except LLMUnavailableError:

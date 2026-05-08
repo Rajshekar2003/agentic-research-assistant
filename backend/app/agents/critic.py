@@ -25,6 +25,11 @@ from app.llm.client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
+# TODO Day 12: prompt tuning deferred until live calibration check.
+# If revision rate is too high (>50%), add: "If the draft is good enough for delivery and you
+# cannot identify a specific concrete fix, approve. Do not revise based on stylistic preferences."
+# If revision rate is too low (<15%), add: "If any specific claim is not supported by the
+# verified facts, you MUST revise. Do not approve drafts that introduce unsupported claims."
 _SYSTEM_PROMPT = (
     "You are a research critic. Given a user's question, a list of verified facts that were "
     "provided to a writer, and the writer's draft answer, evaluate whether the draft is "

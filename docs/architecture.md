@@ -140,6 +140,46 @@ The graph line includes `path=graph` for log filtering by mode. The baseline lin
 
 ---
 
+## Performance (Day 12)
+
+### Searcher parallelisation
+
+Before Day 12, the Searcher ran one Tavily call per sub-question sequentially. For a 3-sub-question plan this meant ~3 × 2s = ~6s search time before the FactChecker even started. From Day 12, all sub-question calls run concurrently via `asyncio.gather`, so the search phase takes ~2s regardless of plan size (bounded by the slowest single call, not the sum).
+
+```python
+# Day 11 — sequential
+for sub_q in plan:
+    results = await search(sub_q, max_results=max_per_q)
+
+# Day 12 — parallel
+results_per_q = await asyncio.wait_for(
+    asyncio.gather(*[search(sub_q, max_results=max_per_q) for sub_q in plan]),
+    timeout=20.0,
+)
+```
+
+If any single `search()` call raises `SearchUnavailableError`, `gather` propagates it immediately (default `return_exceptions=False`). A partial answer from surviving sub-questions would be worse than a clear failure, so we fail fast.
+
+### Timeout taxonomy
+
+Every I/O boundary has an explicit timeout. The 504 vs 503 distinction is intentional:
+
+| Layer | Timeout | On expiry |
+|-------|---------|-----------|
+| Per-Tavily call (`asyncio.wait_for`) | 15 s | `SearchUnavailableError` → 503 |
+| Searcher gather (`asyncio.wait_for`) | 20 s | `SearchUnavailableError` → 503 |
+| Groq SDK (`AsyncGroq(timeout=...)`) | 30 s | triggers Gemini fallback |
+| Gemini call (`asyncio.wait_for`) | 30 s | triggers `LLMUnavailableError` → 503 |
+| Baseline endpoint (`asyncio.wait_for`) | 30 s | HTTP **504** |
+| Graph endpoint (`asyncio.wait_for`) | 60 s | HTTP **504** |
+
+**503** = a downstream provider (Tavily, Groq, Gemini) is unavailable — the service is healthy but dependencies are not.  
+**504** = our own pipeline ran too long — the service and its dependencies are up, but the specific request exceeded the budget.
+
+The graph endpoint gets a more generous cap (60s vs 30s) because in the worst case it runs 3 Writer calls + 3 Critic calls + Planner + FactChecker + one parallel search fan-out.
+
+---
+
 ## Known limitations
 
 - Token counting in the Gemini fallback path may return `None` for `tokens_in`/`tokens_out` depending on SDK version; the Week 4 eval harness will use `prompt_token_count` from native API responses.

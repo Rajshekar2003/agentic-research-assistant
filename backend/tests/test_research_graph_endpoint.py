@@ -3,8 +3,12 @@
 Day 11: 5-node graph (planner → searcher → fact_checker → writer → critic).
 Total LLM calls per happy-path request: 4 (planner + fact_checker + writer + critic).
 critic_verdict and revisions are now included in the response.
+
+Day 12: Top-level 504 timeout test added — graph exceeding _GRAPH_TIMEOUT_SECONDS returns
+HTTP 504 (distinct from 503 which means a downstream provider is unavailable).
 """
 
+import asyncio
 import json
 import logging
 from unittest.mock import AsyncMock, MagicMock
@@ -323,6 +327,28 @@ def test_graph_endpoint_rejects_short_query():
     """Query shorter than 3 characters → 422 (validation before graph runs)."""
     response = client.post("/research/graph", json={"query": "hi"})
     assert response.status_code == 422
+
+
+def test_graph_endpoint_returns_504_on_overall_timeout(monkeypatch):
+    """When ainvoke() runs past _GRAPH_TIMEOUT_SECONDS, the endpoint returns HTTP 504.
+
+    504 (Gateway Timeout) is distinct from 503 (provider unavailable) — it signals
+    that our own pipeline ran too long, not that a downstream service is down.
+    """
+
+    async def _slow_ainvoke(state):
+        await asyncio.sleep(5.0)
+        return {}
+
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = _slow_ainvoke
+    monkeypatch.setattr("app.api.research.get_compiled_graph", lambda: mock_graph)
+    monkeypatch.setattr("app.api.research._GRAPH_TIMEOUT_SECONDS", 0.1)
+
+    response = client.post("/research/graph", json={"query": "timeout test query"})
+
+    assert response.status_code == 504
+    assert "took too long" in response.json()["detail"]
 
 
 def test_graph_endpoint_logs_plan_size_and_facts_count(monkeypatch, caplog):

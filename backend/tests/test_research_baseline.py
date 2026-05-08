@@ -1,5 +1,10 @@
-"""Tests for the /research endpoint — RAG baseline (mocked search + LLM)."""
+"""Tests for the /research endpoint — RAG baseline (mocked search + LLM).
 
+Day 12: 504 timeout test added — baseline pipeline exceeding _BASELINE_TIMEOUT_SECONDS
+returns HTTP 504 (distinct from 503 which means a downstream provider is unavailable).
+"""
+
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -100,3 +105,23 @@ def test_research_rejects_whitespace_only():
     """Query consisting only of whitespace/punctuation returns 422."""
     response = client.post("/research", json={"query": "   ???   "})
     assert response.status_code == 422
+
+
+def test_baseline_endpoint_returns_504_on_overall_timeout(monkeypatch):
+    """When the search + LLM pipeline runs past _BASELINE_TIMEOUT_SECONDS, returns HTTP 504.
+
+    504 (Gateway Timeout) is distinct from 503 (provider unavailable) — it signals
+    that our own pipeline ran too long, not that a downstream service is down.
+    """
+
+    async def _slow_search(query, max_results):
+        await asyncio.sleep(5.0)
+        return []
+
+    monkeypatch.setattr("app.api.research.search", _slow_search)
+    monkeypatch.setattr("app.api.research._BASELINE_TIMEOUT_SECONDS", 0.1)
+
+    response = client.post("/research", json={"query": "timeout test query"})
+
+    assert response.status_code == 504
+    assert "took too long" in response.json()["detail"]
