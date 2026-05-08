@@ -2,11 +2,13 @@
 
 ## Overview
 
-The system accepts a natural-language research question, retrieves relevant web content via Tavily, and synthesizes a grounded, citation-bearing answer via an LLM (Groq primary, Gemini fallback). It is optimized for two goals: portfolio-quality engineering (typed schemas, sanitized errors, structured telemetry, mocked tests) and a controlled Week 4 evaluation comparing the single-pass RAG baseline against a multi-agent LangGraph pipeline on HotpotQA. At the end of Week 1 the system has two endpoints — `POST /research` (baseline, locked) and `POST /research/graph` (currently a single-node graph wrapping the same pipeline) — so the evaluation infrastructure is wired up before the multi-agent logic exists. By Week 6, `POST /research/graph` will run a five-node agent graph (Planner → Searcher → FactChecker → Writer → Critic); the baseline endpoint is never modified, giving a clean eval comparison point.
+The system accepts a natural-language research question, retrieves relevant web content via Tavily, and synthesizes a grounded, citation-bearing answer via an LLM (Groq primary, Gemini fallback). It is optimized for two goals: portfolio-quality engineering (typed schemas, sanitized errors, structured telemetry, mocked tests) and a controlled Week 4 evaluation comparing the single-pass RAG baseline against a multi-agent LangGraph pipeline on HotpotQA. As of Week 2, `POST /research/graph` runs a five-node multi-agent graph (Planner → Searcher → FactChecker → Writer → Critic) with a conditional Critic→Writer feedback loop capped at 2 revisions. The baseline endpoint `POST /research` remains locked, giving a clean eval comparison point for Week 4.
 
 ---
 
 ## Current state (end of Week 1)
+
+*Historical: Week 1 single-node implementation (Day 6).*
 
 Request flow for `POST /research/graph`:
 
@@ -43,9 +45,9 @@ The `POST /research` baseline follows the same Tavily → Groq/Gemini flow but c
 
 ---
 
-## Target state (end of Week 6)
+## Current architecture (Week 2)
 
-`POST /research/graph` — five-node multi-agent graph:
+`POST /research/graph` — five-node multi-agent graph, deployed Day 11:
 
 ```mermaid
 flowchart TD
@@ -57,6 +59,7 @@ flowchart TD
     Critic{"Critic\nScore quality — approve or request revision"}
     Critic -->|"approve"| E([END])
     Critic -->|"revise (revision_count < 2)"| Writer
+    Critic -->|"revise (revision_count ≥ 2)"| E
 ```
 
 The Critic → Writer back-edge is guarded by `revision_count`; the hard cap prevents infinite loops. `POST /research` (baseline) stays unchanged throughout.
@@ -112,13 +115,21 @@ class ResearchState(TypedDict, total=False):
 
 **Tavily search wrapper** (`app/tools/search.py`). The `search()` function wraps `AsyncTavilyClient` with a 15-second `asyncio.wait_for` timeout and URL-based deduplication before returning up to `max_results` `SearchResult` objects. The design decision is to treat search as a must-succeed step: any Tavily failure raises `SearchUnavailableError` and the endpoint returns 503 rather than falling back to an ungrounded LLM answer, which would be worse. There is no fallback search provider. Failure mode: Tavily latency (~2s average) dominates the total response time; a quota exhaustion or network failure surfaces immediately as a hard 503 with no retry.
 
-**LangGraph workflow** (`app/graph/workflow.py`). In Week 1, the compiled graph has a single `research_node` that runs the full baseline pipeline (search → prompt-build → generate) and returns a state delta. The graph is compiled once at module import time and held in a `@lru_cache` singleton (`get_compiled_graph()`), with a module-level `compiled_graph` variable for direct import access. The Week 1 graph exists specifically to establish LangGraph plumbing — state schema, compiled graph, `ainvoke` wiring, and the `/graph` endpoint — before any agent logic is added in Week 2. Failure mode: exceptions from the node propagate through `ainvoke()` directly; `SearchUnavailableError` and `LLMUnavailableError` are caught at the endpoint layer; anything else returns 500.
+**LangGraph workflow** (`app/graph/workflow.py`). As of Week 2, the compiled graph has five nodes wired in sequence with a conditional back-edge from Critic to Writer. The graph is compiled once at module import time and held in a `@lru_cache` singleton (`get_compiled_graph()`), with a module-level `compiled_graph` variable for direct import access. The `route_after_critic` function implements the revision cap: `revision_count >= 2` unconditionally routes to END. Failure mode: exceptions from nodes propagate through `ainvoke()` directly; `SearchUnavailableError` and `LLMUnavailableError` are caught at the endpoint layer; anything else returns 500.
+
+**Agents (Week 2)** (`app/agents/`). Each agent is a module exposing a single `async def run(state: ResearchState) -> dict` function — no classes, no inheritance, no shared state between agents.
+
+- **Planner** (`planner.py`). Decomposes the user query into 2–4 focused sub-questions via a zero-shot LLM prompt with a JSON-array-only output constraint. Falls back to `[query]` on any parse or validation failure so the graph is never blocked by a bad decomposition.
+- **Searcher** (`searcher.py`). Runs one Tavily call per sub-question concurrently via `asyncio.gather` (parallelized Day 12), deduplicates results globally by URL, and caps the combined set at 8. Retrieval-only since Day 9 — no LLM call; all synthesis responsibility lives in FactChecker and Writer.
+- **FactChecker** (`fact_checker.py`). Extracts `{claim, sources}` pairs from search results using a strict JSON-output LLM prompt. Falls back to an empty facts list on any parse or schema failure rather than fabricating claims. Source IDs are validated against the actual result count before being returned.
+- **Writer** (`writer.py`). Synthesizes the final answer from verified facts, citing source numbers inline. On revision passes (`revision_count > 0`), uses a separate system prompt incorporating the Critic's concrete feedback and the previous draft. Short-circuits with a graceful fallback message when `facts` is empty, without calling the LLM.
+- **Critic** (`critic.py`). Evaluates the Writer's draft against verified facts on four criteria: groundedness, citation accuracy, completeness, and clarity. Returns `approve` → END or `revise` → Writer (up to the hard cap). Falls back to `approve` on any JSON parse or schema failure — safety over strictness, never an infinite loop.
 
 **FastAPI endpoints** (`app/api/research.py`). Two routes on the `/research` router: `POST ""` (baseline, locked after Day 5) and `POST /graph` (LangGraph path). Both accept `ResearchRequest`, return `ResearchResponse`, and use identical error-handling shapes (503 for `SearchUnavailableError` or `LLMUnavailableError`). The key design decision is that neither endpoint depends on the other's code path — prompt helpers are duplicated rather than shared to prevent coupling that would confound Week 4 eval results. The `mode` field in the response (`"baseline"` vs `"graph"`) lets the eval harness distinguish which path produced a given answer. Failure mode: `workflow.py` is imported at startup, so a syntax error there prevents both endpoints from loading.
 
 **Frontend** (`frontend/app/page.tsx`, `frontend/lib/api.ts`). A single-page Next.js 16 application with a React state machine (query, mode, loading, result, error) and a typed API client that constructs the URL from the `mode` parameter and applies a 30-second `AbortController` timeout. The frontend is intentionally thin — no routing, no state management library, no component library — because the engineering interest is in the backend pipeline. The Baseline/Graph pill toggle maps directly to the two backend endpoints, enabling manual comparison without separate browser tabs. Failure mode: `NEXT_PUBLIC_API_URL` defaults to `localhost:8000`; a production deploy requires the env var to be set and is not validated at build time.
 
-**Test strategy** (`backend/tests/`). All 23 tests mock external services at the module-attribute level via `monkeypatch.setattr`, targeting the specific import path where the function is called (e.g., `app.graph.workflow.search`, not `app.tools.search.search`). The conftest sets dummy API keys at module load time, before any `Settings()` construction is triggered by `TestClient` imports. `asyncio_mode = auto` in `pyproject.toml` means all `async def` test functions run without a decorator. What is not tested: actual network calls to Tavily/Groq/Gemini, real SDK response parsing, Tavily rate-limit behavior, LangGraph checkpoint and streaming APIs, and end-to-end frontend behavior.
+**Test strategy** (`backend/tests/`). All 69 tests mock external services at the module-attribute level via `monkeypatch.setattr`, targeting the specific import path where the function is called (e.g., `app.graph.workflow.search`, not `app.tools.search.search`). The conftest sets dummy API keys at module load time, before any `Settings()` construction is triggered by `TestClient` imports. `asyncio_mode = auto` in `pyproject.toml` means all `async def` test functions run without a decorator. What is not tested: actual network calls to Tavily/Groq/Gemini, real SDK response parsing, Tavily rate-limit behavior, LangGraph checkpoint and streaming APIs, and end-to-end frontend behavior.
 
 ---
 
@@ -130,13 +141,17 @@ Example baseline log line:
 INFO:app.api.research:Research complete: provider=groq model=llama-3.3-70b-versatile search_results_count=5 search_latency_ms=2041 latency_ms=891 tokens_in=1289 tokens_out=47 total_elapsed_ms=2934
 ```
 
-Example graph log line:
+Example per-node graph log lines (one line emitted per agent, in execution order):
 
 ```
-INFO:app.api.research:Research graph complete: path=graph provider=groq model=llama-3.3-70b-versatile search_results_count=5 elapsed_ms=3102 tokens_in=1302 tokens_out=53
+INFO:app.agents.planner:planner_node — plan_size=3 model=llama-3.3-70b-versatile latency_ms=412 tokens_in=312 tokens_out=48
+INFO:app.agents.searcher:searcher_node — sub_questions=3 total_search_calls=3 unique_urls=7 final_results=7 parallel=true elapsed_ms=1983
+INFO:app.agents.fact_checker:fact_checker_node — facts_count=11 model=llama-3.3-70b-versatile latency_ms=1204 tokens_in=3201 tokens_out=487
+INFO:app.agents.writer:writer_node — answer_length=432 revision=False model=llama-3.3-70b-versatile latency_ms=891 tokens_in=1841 tokens_out=112
+INFO:app.agents.critic:critic_node — verdict=approve revision_count=0 model=llama-3.3-70b-versatile latency_ms=723 tokens_in=2134 tokens_out=67
 ```
 
-The graph line includes `path=graph` for log filtering by mode. The baseline line includes `search_latency_ms` and `latency_ms` as separate fields, making it easy to see that Tavily (~2s) dominates Groq (~0.9s). For the Week 4 eval harness, the relevant fields are `provider`, `model`, `tokens_in`, `tokens_out`, and `total_elapsed_ms` / `elapsed_ms` — these will be written to a JSONL eval log alongside the HotpotQA answer, supporting cost and latency comparisons between the baseline and multi-agent paths without modifying the API response schema.
+On a revision pass the Writer log shows `revision=True` and the Critic log shows `revision_count=1`. The Searcher log has no `model` field — it makes no LLM call. The `path=graph` label is on the endpoint-level completion log; per-node logs are prefixed by their own module name for easy log filtering. The baseline line includes `search_latency_ms` and `latency_ms` as separate fields, making it easy to see that Tavily (~2s) dominates Groq (~0.9s). For the Week 4 eval harness, the relevant fields are `provider`, `model`, `tokens_in`, `tokens_out`, and `total_elapsed_ms` / `elapsed_ms` — these will be written to a JSONL eval log alongside the HotpotQA answer, supporting cost and latency comparisons between the baseline and multi-agent paths without modifying the API response schema.
 
 ---
 
@@ -189,8 +204,10 @@ The graph endpoint gets a more generous cap (60s vs 30s) because in the worst ca
 - No auth on any endpoint.
 - No persistence — every query is stateless; there is no query history, session, or user model.
 - 30-second timeout on LLM calls can be hit by very long Tavily responses that push the context window near the model's limit.
-- Single LangGraph node means no agent specialization — the Planner, FactChecker, and Critic nodes from the Week 6 target do not exist yet.
 - Sources cited can be low quality. RAG can produce confidently-cited hallucinations when the retrieved sources are speculative or wrong — observed during Day 5 manual testing with a query about future model release dates.
+- Graph latency varies widely (3–26s observed across smoke eval queries); no defined p95 budget or short-circuit path for simple queries before deployment.
+- Soft hallucinations remain possible when retrieved sources themselves contain speculative claims. The Critic evaluates the draft against the retrieved facts, not against ground truth — a misleading source that makes it through Searcher can persist to the final answer (observed on q03 Tailwind comparison in smoke eval).
+- Critic does not apply a source-quality signal. All Tavily results are treated as equally credible; speculative or opinionated sources are weighted the same as official documentation.
 
 ---
 
@@ -204,6 +221,10 @@ The graph endpoint gets a more generous cap (60s vs 30s) because in the worst ca
 | Single-node graph in Week 1 (before adding agents) | Establishes LangGraph plumbing — state schema, compiled graph, `ainvoke` wiring, endpoint — on a trivial case before adding complexity; makes Week 2 bugs attributable to agent logic rather than graph setup | Skipping straight to multi-agent: the first time the graph has bugs it is hard to separate LangGraph issues from agent-logic issues; the trivial week makes debugging faster |
 | Mocked tests only, no integration tests against real APIs | Tests run in 1.7s with no network and no keys in CI; mocks are precise enough to test error-handling paths (rate limits, 5xx) that are hard to trigger reliably with real APIs | Hitting real APIs in CI: slow (~5–10s per test), flaky on rate limits, expensive at scale, impossible without secrets in the test environment; the tradeoff is that mocks do not catch SDK-level parsing bugs |
 | `SecretStr` + `lru_cache` settings | `SecretStr` prevents keys from appearing in `repr()` or accidental log calls; `lru_cache` on `get_settings()` and `get_llm_client()` ensures one Settings parse and one SDK client construction per process lifetime | Reading env vars directly per request: keys visible in any `str()` output; constructing SDK clients per request: measurable startup overhead on every API call, and multiple client instances can race on connection pool limits |
+| FactChecker → Writer split (Day 10) | Each prompt has one job: claim extraction or synthesis. Separating them makes it possible to attribute quality failures to the right step in telemetry, and each prompt fits on one screen | A single "extract-and-synthesize" node: one fewer LLM call per query, but failures are ambiguous — impossible to tell whether the extraction or the synthesis degraded the answer |
+| Critic falls back to `approve` on parse failure (Day 11) | Safety over strictness: shipping an unreviewed draft is no worse than having no Critic at all; an uncaught exception or infinite loop would be catastrophically worse. Only `LLMUnavailableError` propagates to the caller | Raising on parse failure: surfaces the bug but crashes a user-facing request; retrying: adds latency without fixing the underlying LLM output quality |
+| Searcher parallelized via `asyncio.gather` (Day 12) | Cuts the search phase from ~N×2s to ~2s (bounded by the slowest single call, not the sum); 20s gather timeout bounds worst-case fan-out while still failing fast on Tavily errors | Threading: unnecessary overhead — Tavily calls are I/O-bound and asyncio handles them natively; sequential: ~6s search for a 3-element plan before FactChecker even starts |
+| 504 vs 503 status codes (Day 12) | Distinct semantics: 503 = downstream provider down (check Tavily/Groq status page); 504 = our pipeline exceeded its time budget (check query complexity). Mixing them makes on-call diagnosis slower | Single 500 for all failures: loses the signal about whether the problem is ours or a dependency's |
 
 ---
 
@@ -220,7 +241,7 @@ agentic-research-assistant/
 │   │   ├── config.py         # pydantic-settings Settings, lru_cache singleton
 │   │   ├── main.py           # FastAPI app factory, CORS, /health endpoint
 │   │   └── schemas.py        # Shared Pydantic v2 models (Source, ResearchRequest, ResearchResponse)
-│   ├── tests/                # Pytest suite — all mocked, asyncio_mode=auto, 23 tests
+│   ├── tests/                # Pytest suite — all mocked, asyncio_mode=auto, 69 tests
 │   └── venv/                 # Python 3.13 virtual environment (not committed)
 ├── docs/                     # Architecture document and week retrospectives
 └── frontend/                 # Next.js 16 + Tailwind v4 single-page frontend

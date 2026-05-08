@@ -33,7 +33,7 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 2 Day 13 complete — smoke eval harness in `backend/eval/`. Runs 8-10 curated questions through both `/research` and `/research/graph` endpoints, writes a markdown report with paired answers ready for human scoring on a 4-criterion rubric (groundedness, citation accuracy, completeness, hallucination). First eval report committed at `eval/reports/smoke-eval-{date}.md`. ~69 pytest tests still passing (eval is not unit-tested — it's a thin script with no logic to test).
+Week 2 complete. Multi-agent graph: Planner → Searcher → FactChecker → Writer → Critic, with conditional feedback loop capped at 2 revisions. Searcher parallelized via `asyncio.gather`. 69 pytest tests passing. Smoke eval at `backend/eval/reports/smoke-eval-2026-05-08.md` graded with graph wins on 4/8 questions, ties on 3/8, baseline wins on 1/8. Average latencies: baseline 4.0s, graph 12.4s (~3.1x cost). Critic revision rate ~25% across live tests. Week 2 retro at `docs/week2-retro.md`. Week 3 begins HotpotQA eval harness.
 
 **Eval vs tests:** The eval harness in `backend/eval/` is intentionally NOT in the pytest suite. It is an integration-only artifact that requires real APIs (Tavily, Groq) and a running server (`uvicorn`). Pattern: `backend/tests/` for code correctness (mocked, fast, CI-safe); `backend/eval/` for behavioral quality (live APIs, human-graded, run manually before retros).
 
@@ -45,9 +45,12 @@ Current baseline (locked after Day 5): **Search (Tavily) → Generate (Groq w/ G
 
 Week 2 target (multi-agent, for eval comparison): **5 nodes** — DEPLOYED Day 11.  Days 12-14 are tuning, parallelization, smoke eval, and Week 2 retro.  Served by POST /research/graph.
 
-## Known issues
+## Known issues / limitations
 
 - Token counting in Gemini fallback path may show None for tokens_in/tokens_out depending on SDK version — non-blocking, eval harness in Week 4 will use prompt_token_count from native API responses.
+- Graph latency variance: 3–26s observed across smoke eval queries; no defined p95 budget before deployment.
+- Soft hallucinations possible when retrieved sources contain speculative claims — Critic evaluates the draft against retrieved facts, not ground truth, so a misleading source that passes Searcher can persist to the final answer.
+- Critic does not currently use a source-quality signal; all Tavily results are treated as equally credible.
 
 ## Dev workflow
 
