@@ -1,0 +1,50 @@
+questions:
+  - id: q01
+    category: factual
+    text: "What is the capital of Mongolia?"
+    notes: "Both should answer correctly. Tests baseline floor."
+
+  - id: q02
+    category: definition
+    text: "Explain how RAFT consensus works in distributed systems"
+    notes: "Technical synthesis. Graph should decompose into leader election + log replication + safety."
+
+  - id: q03
+    category: comparison
+    text: "Compare Tailwind CSS v3 and v4: what changed?"
+    notes: "Multi-aspect. Planner should split into v3 features, v4 features, breaking changes."
+
+  - id: q04
+    category: multi_hop
+    text: "Which Indian state produces the most tea, and what is its capital?"
+    notes: "Two-step: identify state, then capital. Watch if both endpoints get both parts."
+
+  - id: q05
+    category: current_events
+    text: "What were the major announcements at AWS re:Invent 2024?"
+    notes: "Tests retrieval freshness. May be poor on either endpoint depending on Tavily indexing."
+
+  - id: q06
+    category: unanswerable
+    text: "What was the keynote speaker's third slide at NeurIPS 2026 workshop on synthetic biology?"
+    notes: "Honest fallback test. Graph should say 'cannot verify'; baseline may hallucinate."
+
+  - id: q07
+    category: ambiguous
+    text: "Why is React popular?"
+    notes: "Both should produce reasonable answers. Tests baseline floor on subjective topics."
+
+  - id: q08
+    category: subtle_trap
+    text: "When did Brazil overtake Germany as a top renewable energy producer?"
+    notes: "Premise may be false. Watch for groundedness — does the answer accept the premise without evidence?"
+
+  - id: q09
+    category: custom
+    text: "PLACEHOLDER — Roy will edit this question"
+    notes: "User-chosen question."
+
+  - id: q10
+    category: custom
+    text: "PLACEHOLDER — Roy will edit this question"
+    notes: "User-chosen question."

@@ -33,7 +33,9 @@ docs/           Architecture docs and diagrams
 
 ## Current status
 
-Week 2 Day 12 complete — Searcher's per-sub-question Tavily calls now run in parallel via `asyncio.gather`, cutting average latency on multi-subquestion queries from ~9-12s to ~4-6s. Per-search 15s `asyncio.wait_for` cap retained; gather has a 20s overall cap. Both endpoints have a top-level timeout (30s baseline, 60s graph) returning HTTP 504 on timeout — distinct from 503 (service unavailable). Critic prompt unchanged pending live calibration. 69 pytest tests passing.
+Week 2 Day 13 complete — smoke eval harness in `backend/eval/`. Runs 8-10 curated questions through both `/research` and `/research/graph` endpoints, writes a markdown report with paired answers ready for human scoring on a 4-criterion rubric (groundedness, citation accuracy, completeness, hallucination). First eval report committed at `eval/reports/smoke-eval-{date}.md`. ~69 pytest tests still passing (eval is not unit-tested — it's a thin script with no logic to test).
+
+**Eval vs tests:** The eval harness in `backend/eval/` is intentionally NOT in the pytest suite. It is an integration-only artifact that requires real APIs (Tavily, Groq) and a running server (`uvicorn`). Pattern: `backend/tests/` for code correctness (mocked, fast, CI-safe); `backend/eval/` for behavioral quality (live APIs, human-graded, run manually before retros).
 
 ## Architecture
 
