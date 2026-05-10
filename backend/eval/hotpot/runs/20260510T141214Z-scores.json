@@ -1,0 +1,103 @@
+{
+  "summary": {
+    "n_questions": 5,
+    "n_baseline_ok": 5,
+    "n_graph_ok": 5,
+    "baseline_em": 0.0,
+    "baseline_f1": 0.04208094463934286,
+    "graph_em": 0.0,
+    "graph_f1": 0.036695652173913046
+  },
+  "by_type": {
+    "comparison": {
+      "n_questions": 1,
+      "n_baseline_ok": 1,
+      "n_graph_ok": 1,
+      "baseline_em": 0.0,
+      "baseline_f1": 0.07692307692307693,
+      "graph_em": 0.0,
+      "graph_f1": 0.1
+    },
+    "bridge": {
+      "n_questions": 4,
+      "n_baseline_ok": 4,
+      "n_graph_ok": 4,
+      "baseline_em": 0.0,
+      "baseline_f1": 0.03337041156840934,
+      "graph_em": 0.0,
+      "graph_f1": 0.020869565217391306
+    }
+  },
+  "per_question": [
+    {
+      "question_id": "5ae143ed55429920d5234360",
+      "question_type": "bridge",
+      "question_level": "hard",
+      "ground_truth": "1755",
+      "baseline_prediction": "The provided sources do not contain information about the founding year of Moscow State University, where Sergei Aleksandrovich Tokarev was a professor [1], [2], [3]. Therefore, it is not possible to answer this question using the given sources.",
+      "baseline_em": 0,
+      "baseline_f1": 0.0,
+      "graph_prediction": "I couldn't verify any claims from the available sources for this question.",
+      "graph_em": 0,
+      "graph_f1": 0.0,
+      "baseline_status": "ok",
+      "graph_status": "ok"
+    },
+    {
+      "question_id": "5abc19705542993a06baf86e",
+      "question_type": "bridge",
+      "question_level": "hard",
+      "ground_truth": "Dutch",
+      "baseline_prediction": "The Black Book starred Carice van Houten, who played the role of Rachel Stein, a Jewish woman [1], [3], [4], [5]. The sources do not provide information on Carice van Houten's heritage, only the character she played.",
+      "baseline_em": 0,
+      "baseline_f1": 0.0,
+      "graph_prediction": "Black Book starred the actresses Lou de La\u00e2ge [1] and Ade Laoye [3], but their heritage is not specified in the provided facts.",
+      "graph_em": 0,
+      "graph_f1": 0.0,
+      "baseline_status": "ok",
+      "graph_status": "ok"
+    },
+    {
+      "question_id": "5ac3e0f7554299194317388b",
+      "question_type": "bridge",
+      "question_level": "hard",
+      "ground_truth": "Kevin Spacey",
+      "baseline_prediction": "According to the sources, Kevin Spacey is the actor that is mentioned in relation to American Beauty in multiple sources [1], [2], [3], [4], and [5]. Chris Cooper is also mentioned in [1] and [5] as being part of the ensemble cast. Therefore, both Kevin Spacey and Chris Cooper are actors that American Beauty has in common, as they both starred in the film.",
+      "baseline_em": 0,
+      "baseline_f1": 0.06451612903225806,
+      "graph_prediction": "Kevin Spacey, Annette Bening, Thora Birch, Wes Bentley, and Mena Suvari are all in American Beauty [1, 2, 4]. Since the question asks which actor American Beauty and American Beauty have in common, the answer would be any of the actors listed, as they all appear in the same film. Kevin Spacey [1, 2, 4], Annette Bening [1, 2, 4], Thora Birch [1, 2, 4], Wes Bentley [2, 4], and Mena Suvari [2, 4] are all common to American Beauty. In essence, all the mentioned actors are common to the film. The film shares all its actors with itself, including Kevin Spacey [1, 2, 4].",
+      "graph_em": 0,
+      "graph_f1": 0.039999999999999994,
+      "baseline_status": "ok",
+      "graph_status": "ok"
+    },
+    {
+      "question_id": "5ae518655542993aec5ec139",
+      "question_type": "bridge",
+      "question_level": "hard",
+      "ground_truth": "40 members",
+      "baseline_prediction": "The provided sources do not contain enough information to answer the question about the total number of members in the upper house of the legislature that Ken Pruitt was a part of [1].",
+      "baseline_em": 0,
+      "baseline_f1": 0.06896551724137931,
+      "graph_prediction": "Ken Pruitt was a Republican member of the Florida Senate [1, 3]. The number of members in the Florida Senate is not specified in the provided facts, therefore, it is not possible to determine the exact number of members in the upper house of the legislature that Ken Pruitt was a part of.",
+      "graph_em": 0,
+      "graph_f1": 0.04347826086956522,
+      "baseline_status": "ok",
+      "graph_status": "ok"
+    },
+    {
+      "question_id": "5ab985eb554299131ca42360",
+      "question_type": "comparison",
+      "question_level": "hard",
+      "ground_truth": "Greyia",
+      "baseline_prediction": "The provided sources [1], [2], [3], [4], and [5] do not contain enough information to answer the question about which genus, Greyia or Calibanus, contains more species.",
+      "baseline_em": 0,
+      "baseline_f1": 0.07692307692307693,
+      "graph_prediction": "Greyia contains more species than Calibanus, with three species [1, 2] compared to two species in Calibanus [3, 4].",
+      "graph_em": 0,
+      "graph_f1": 0.1,
+      "baseline_status": "ok",
+      "graph_status": "ok"
+    }
+  ]
+}
