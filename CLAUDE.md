@@ -39,6 +39,8 @@ Week 2 complete. Multi-agent graph: Planner → Searcher → FactChecker → Wri
 
 Week 3 Day 15 complete — HotpotQA loader at `backend/eval/hotpot/loader.py`. Downloads + caches the dev set (~7,400 questions in distractor setting), exposes a `HotpotQuestion` dataclass, deterministic seeded sampling with type/level filters, and a stats helper. Cached JSON is gitignored. ~76 pytest tests passing (69 from Week 2 + 7 new loader tests).
 
+Week 3 Day 16 complete — HotpotQA runner at `backend/eval/hotpot/runner.py`. Sequential calls to baseline and graph endpoints, JSONL output for crash-safety, resume-on-rerun, configurable delay between questions. Smoke run on 5 questions takes ~2 minutes; production runs of 100-200 questions are 30-50 minutes. ~84 tests passing (76 from Day 15 + 8 new runner tests).
+
 **Eval vs tests:** The eval harness in `backend/eval/` is intentionally NOT in the pytest suite. It is an integration-only artifact that requires real APIs (Tavily, Groq) and a running server (`uvicorn`). Pattern: `backend/tests/` for code correctness (mocked, fast, CI-safe); `backend/eval/` for behavioral quality (live APIs, human-graded, run manually before retros).
 
 ## Architecture
@@ -52,6 +54,7 @@ Week 2 target (multi-agent, for eval comparison): **5 nodes** — DEPLOYED Day 1
 ## Architecture decisions worth defending
 
 - **Loader does not include HotpotQA's context paragraphs.** Our system retrieves its own evidence via Tavily, so giving it the dataset's own source passages would defeat the eval. The `HotpotQuestion` dataclass stores titles only — not passage text.
+- **JSONL output format chosen over single-JSON for resumability.** Each question is one self-contained line, atomically appendable with a flush after each write. A crash mid-run leaves a valid partial file. The scorer (Day 17) reads with line-by-line `json.loads`; re-writing a full JSON array on every append would risk corruption on crash.
 
 ## Known issues / limitations
 

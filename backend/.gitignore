@@ -1,1 +1,2 @@
 eval/hotpot/cache/*.json
+eval/hotpot/runs/*.jsonl
