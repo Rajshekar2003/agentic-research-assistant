@@ -45,7 +45,22 @@ Week 3 Day 17 complete — HotpotQA scorer at `backend/eval/hotpot/scorer.py`. I
 
 Week 3 Day 18 complete — HotpotQA report generator at `backend/eval/hotpot/reporter.py`. Renders scores JSON + optional runner JSONL into a markdown report with headline metrics, per-type breakdowns, latency stats, an honest-refusal section (key for interpreting EM/F1), 4 sample question pairs spanning the score distribution, and a limitations section. ~128 tests passing (114 from Day 17 + 14 new reporter tests).
 
-**Eval vs tests:** The eval harness in `backend/eval/` is intentionally NOT in the pytest suite. It is an integration-only artifact that requires real APIs (Tavily, Groq) and a running server (`uvicorn`). Pattern: `backend/tests/` for code correctness (mocked, fast, CI-safe); `backend/eval/` for behavioral quality (live APIs, human-graded, run manually before retros).
+**Eval vs tests:** The eval harness in `backend/eval/` is intentionally NOT in the pytest suite. It is an integration-only artifact that requires real APIs (Tavily, Groq) and a running server (`uvicorn`). Pattern: `backend/tests/` for code correctness (mocked, fast, CI-safe); `backend/eval/
+` for behavioral quality (live APIs, human-graded, run manually before retros).
+
+**Week 3 complete (Days 15-19).** Eval pipeline shipped:
+- `eval/hotpot/loader.py` — HotpotQA dev set loader (7,405 questions, deterministic sampling)
+- `eval/hotpot/runner.py` — JSONL-based runner with resume-on-rerun, crash-safe appends
+- `eval/hotpot/scorer.py` — official EM/F1 metrics reproducing `hotpot_evaluate_v1.py`
+- `eval/hotpot/reporter.py` — markdown report generator with refusal tracking + sample pairs
+
+128 tests passing. Smoke run on 25 stratified HotpotQA questions at `eval/hotpot/runs/20260511T042655Z-report.md`:
+- Baseline F1=0.076, Graph F1=0.069 (EM=0.000 for both — metric artifact)
+- Baseline refused 14/25 (56%), Graph refused 5/25 (20%) — graph attempts more, gets some right that baseline didn't try
+- Mean latency: baseline 3.5s, graph 9.5s (2.7× cost)
+- 429 rate-limits from Groq absorbed by client backoff; Week 4 needs higher --delay-seconds
+
+Week 4 runs at 200-500 questions to confirm trends.
 
 ## Architecture
 
