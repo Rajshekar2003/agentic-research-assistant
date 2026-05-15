@@ -109,7 +109,10 @@ async def test_run_single_question_baseline_503():
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        result = await run_single_question(client, _make_question(), "http://localhost:8000")
+        # max_retries=0: verify the single-attempt error path without retry overhead.
+        result = await run_single_question(
+            client, _make_question(), "http://localhost:8000", max_retries=0
+        )
 
     assert result.baseline.status == "http_error"
     assert result.baseline.http_status == 503
@@ -132,7 +135,10 @@ async def test_run_single_question_graph_504():
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        result = await run_single_question(client, _make_question(), "http://localhost:8000")
+        # max_retries=0: verify the single-attempt error path without retry overhead.
+        result = await run_single_question(
+            client, _make_question(), "http://localhost:8000", max_retries=0
+        )
 
     assert result.baseline.status == "ok"
     assert result.baseline.answer == "Paris"
@@ -151,7 +157,10 @@ async def test_run_single_question_network_exception():
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        result = await run_single_question(client, _make_question(), "http://localhost:8000")
+        # max_retries=0: verify the single-attempt exception path without retry overhead.
+        result = await run_single_question(
+            client, _make_question(), "http://localhost:8000", max_retries=0
+        )
 
     assert result.baseline.status == "exception"
     assert "connection refused" in result.baseline.error
@@ -190,6 +199,146 @@ async def test_run_single_question_captures_graph_facts():
     assert result.graph.critic_verdict == "revise"
     assert result.graph.revisions == 1
     assert len(result.graph.facts) == 2
+
+
+# ---------------------------------------------------------------------------
+# run_single_question retry tests
+# ---------------------------------------------------------------------------
+
+
+async def test_run_single_question_retries_on_429(monkeypatch):
+    """Handler returns 429 twice then 200 — baseline succeeds after 2 retries, counter=2."""
+    monkeypatch.setattr("eval.hotpot.runner.asyncio.sleep", lambda _: _noop())
+
+    call_count = [0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count[0] += 1
+        if call_count[0] <= 2:
+            return httpx.Response(429, text="Too Many Requests")
+        return _route(
+            request,
+            baseline=httpx.Response(200, json=_BASELINE_JSON),
+            graph=httpx.Response(200, json=_GRAPH_JSON),
+        )
+
+    transport = httpx.MockTransport(handler)
+    counter = [0]
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await run_single_question(
+            client, _make_question(), "http://localhost:8000",
+            max_retries=3, _retry_counter=counter,
+        )
+
+    assert result.baseline.status == "ok"
+    assert result.baseline.answer == "Paris"
+    assert counter[0] == 2
+
+
+async def test_run_single_question_retries_on_503(monkeypatch):
+    """Handler returns 503 twice then 200 — baseline succeeds after 2 retries, counter=2."""
+    monkeypatch.setattr("eval.hotpot.runner.asyncio.sleep", lambda _: _noop())
+
+    call_count = [0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count[0] += 1
+        if call_count[0] <= 2:
+            return httpx.Response(503, text="Service Unavailable")
+        return _route(
+            request,
+            baseline=httpx.Response(200, json=_BASELINE_JSON),
+            graph=httpx.Response(200, json=_GRAPH_JSON),
+        )
+
+    transport = httpx.MockTransport(handler)
+    counter = [0]
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await run_single_question(
+            client, _make_question(), "http://localhost:8000",
+            max_retries=3, _retry_counter=counter,
+        )
+
+    assert result.baseline.status == "ok"
+    assert counter[0] == 2
+
+
+async def test_run_single_question_retries_on_timeout(monkeypatch):
+    """Handler raises TimeoutException twice then returns 200 — succeeds after 2 retries."""
+    monkeypatch.setattr("eval.hotpot.runner.asyncio.sleep", lambda _: _noop())
+
+    call_count = [0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count[0] += 1
+        if call_count[0] <= 2:
+            raise httpx.TimeoutException("read timeout")
+        return _route(
+            request,
+            baseline=httpx.Response(200, json=_BASELINE_JSON),
+            graph=httpx.Response(200, json=_GRAPH_JSON),
+        )
+
+    transport = httpx.MockTransport(handler)
+    counter = [0]
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await run_single_question(
+            client, _make_question(), "http://localhost:8000",
+            max_retries=3, _retry_counter=counter,
+        )
+
+    assert result.baseline.status == "ok"
+    assert counter[0] == 2
+
+
+async def test_run_single_question_does_not_retry_on_400():
+    """Handler returns 400 — hard failure, no retry, counter stays 0."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="Bad Request")
+
+    transport = httpx.MockTransport(handler)
+    counter = [0]
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await run_single_question(
+            client, _make_question(), "http://localhost:8000",
+            max_retries=3, _retry_counter=counter,
+        )
+
+    assert result.baseline.status == "http_error"
+    assert result.baseline.http_status == 400
+    assert counter[0] == 0
+
+
+async def test_run_single_question_gives_up_after_max_retries(monkeypatch):
+    """Handler always returns 429; after max_retries=3 exhausted, baseline is 'max retries exceeded'."""
+    monkeypatch.setattr("eval.hotpot.runner.asyncio.sleep", lambda _: _noop())
+
+    call_count = [0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count[0] += 1
+        # First 4 calls (all baseline attempts) return 429; graph then gets 200.
+        if call_count[0] <= 4:
+            return httpx.Response(429, text="Too Many Requests")
+        return _route(
+            request,
+            baseline=httpx.Response(200, json=_BASELINE_JSON),
+            graph=httpx.Response(200, json=_GRAPH_JSON),
+        )
+
+    transport = httpx.MockTransport(handler)
+    counter = [0]
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await run_single_question(
+            client, _make_question(), "http://localhost:8000",
+            max_retries=3, _retry_counter=counter,
+        )
+
+    assert result.baseline.status == "http_error"
+    assert result.baseline.error is not None
+    assert "max retries exceeded" in result.baseline.error
+    assert counter[0] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -303,12 +452,13 @@ async def test_run_eval_continues_on_error(tmp_path):
         )
 
     transport = httpx.MockTransport(handler)
-    # Must not raise even though q1 fails.
+    # max_retries=0: call_count positions are deterministic only without retries.
     await run_eval(
         questions,
         "http://localhost:8000",
         output,
         delay_seconds=0,
+        max_retries=0,
         _transport=transport,
     )
 
@@ -327,3 +477,48 @@ async def test_run_eval_continues_on_error(tmp_path):
 
     assert results[2]["baseline"]["status"] == "ok"
     assert results[2]["graph"]["status"] == "ok"
+
+
+async def test_run_eval_aggregates_retry_counts(monkeypatch, tmp_path):
+    """3 questions, graph retries once each → stats reports total_retries=3."""
+    monkeypatch.setattr("eval.hotpot.runner.asyncio.sleep", lambda _: _noop())
+
+    graph_call_count = [0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/research/graph" in url:
+            graph_call_count[0] += 1
+            # Odd-numbered graph calls fail (first attempt per question); even ones succeed.
+            if graph_call_count[0] % 2 == 1:
+                return httpx.Response(429, text="Rate limited")
+        return _route(
+            request,
+            baseline=httpx.Response(200, json=_BASELINE_JSON),
+            graph=httpx.Response(200, json=_GRAPH_JSON),
+        )
+
+    questions = [_make_question(id=f"q{i}", question=f"Q{i}?") for i in range(3)]
+    output = tmp_path / "out.jsonl"
+
+    transport = httpx.MockTransport(handler)
+    stats = await run_eval(
+        questions,
+        "http://localhost:8000",
+        output,
+        delay_seconds=0,
+        max_retries=3,
+        _transport=transport,
+    )
+
+    assert stats["total_retries"] == 3
+    assert stats["both_ok"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Async no-op helper (used to replace asyncio.sleep in monkeypatched tests)
+# ---------------------------------------------------------------------------
+
+
+async def _noop():
+    pass

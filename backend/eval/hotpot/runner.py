@@ -13,6 +13,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,8 @@ from eval.hotpot.loader import HotpotQuestion, load_dataset, sample_questions
 logger = logging.getLogger(__name__)
 
 TIMEOUT_S = 90.0
+
+_TRANSIENT_HTTP_STATUSES = frozenset({429, 503, 504})
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +90,22 @@ class QuestionResult:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _is_transient(result: EndpointResult) -> bool:
+    """Return True if result represents a transient failure worth retrying.
+
+    Transient: HTTP 429/503/504, client-side timeouts, and network-level exceptions
+    (connection resets, DNS failures, etc.). Hard failures (4xx other than 429) are
+    not retried.
+    """
+    if result.status == "timeout":
+        return True
+    if result.status == "exception":
+        return True
+    if result.status == "http_error" and result.http_status in _TRANSIENT_HTTP_STATUSES:
+        return True
+    return False
 
 
 async def _call_endpoint(
@@ -173,23 +192,74 @@ async def run_single_question(
     client: httpx.AsyncClient,
     question: HotpotQuestion,
     base_url: str,
+    max_retries: int = 3,
+    _retry_counter: list[int] | None = None,
 ) -> QuestionResult:
     """Call both endpoints for one question and return a combined QuestionResult.
 
-    Calls are sequential: baseline first, then graph. Neither call raises — all
-    failure modes (HTTP errors, timeouts, network exceptions) are captured in the
-    corresponding EndpointResult.status field.
+    Calls are sequential: baseline first, then graph. Each endpoint is retried up to
+    max_retries times on transient failures (HTTP 429/503/504, timeouts, network
+    exceptions) with exponential backoff (2**attempt seconds, capped at 30s).
+    Hard failures (4xx other than 429) are returned immediately without retrying.
 
     Args:
         client: Shared httpx AsyncClient with timeout already configured.
         question: The HotpotQA question to evaluate.
         base_url: Base URL of the research assistant API (no trailing slash).
+        max_retries: Number of retry attempts per endpoint on transient failures.
+            Default 3. Set to 0 to disable retrying.
+        _retry_counter: Optional mutable [int] list incremented once per retry attempt
+            across both endpoints. Pass this from run_eval to aggregate counts.
 
     Returns:
         QuestionResult with EndpointResult for both baseline and graph endpoints.
     """
-    baseline = await _call_endpoint(client, f"{base_url}/research", question.question)
-    graph = await _call_endpoint(client, f"{base_url}/research/graph", question.question)
+
+    async def _call_with_retry(url: str, endpoint_name: str) -> EndpointResult:
+        for attempt in range(max_retries + 1):
+            result = await _call_endpoint(client, url, question.question)
+
+            if result.status == "ok":
+                return result
+
+            if not _is_transient(result):
+                return result  # hard failure — return immediately, no retry
+
+            if attempt < max_retries:
+                if _retry_counter is not None:
+                    _retry_counter[0] += 1
+                error_summary = result.error or str(result.http_status)
+                logger.warning(
+                    "retry attempt=%d/%d for %s on %s: %s",
+                    attempt + 1,
+                    max_retries,
+                    question.id,
+                    endpoint_name,
+                    error_summary,
+                )
+                sleep_s = min(2**attempt, 30)
+                await asyncio.sleep(sleep_s)
+            else:
+                # Exhausted all retries on a transient failure.
+                if max_retries > 0:
+                    error_summary = result.error or str(result.http_status)
+                    return EndpointResult(
+                        status="http_error",
+                        http_status=result.http_status,
+                        elapsed_ms=result.elapsed_ms,
+                        answer=None,
+                        sources=None,
+                        facts=None,
+                        critic_verdict=None,
+                        revisions=None,
+                        error=f"max retries exceeded: {error_summary}",
+                    )
+                return result  # max_retries=0: just return the single attempt result
+
+        raise RuntimeError("unreachable")
+
+    baseline = await _call_with_retry(f"{base_url}/research", "baseline")
+    graph = await _call_with_retry(f"{base_url}/research/graph", "graph")
     return QuestionResult(
         question_id=question.id,
         question_text=question.question,
@@ -206,28 +276,33 @@ async def run_eval(
     questions: list[HotpotQuestion],
     base_url: str,
     output_path: Path,
-    delay_seconds: float = 1.0,
+    delay_seconds: float = 3.0,
     resume: bool = True,
+    max_retries: int = 3,
     _transport: httpx.AsyncBaseTransport | None = None,
-) -> None:
+) -> dict:
     """Run the evaluation sequentially over all questions, writing JSONL after each.
 
     Questions are processed one at a time (no concurrency) to respect Tavily and
-    Groq rate limits. Each result is written and flushed immediately after the pair
-    of endpoint calls completes, so a crash mid-run leaves a valid, partially-complete
-    output file that can be resumed on the next invocation.
+    Groq rate limits. Each result is written, flushed, and fsync'd immediately after
+    the pair of endpoint calls completes, so a crash mid-run leaves a valid,
+    partially-complete output file that can be resumed on the next invocation.
 
     Args:
         questions: Pre-sampled list of HotpotQuestion instances to evaluate.
         base_url: Base URL of the running research assistant server.
         output_path: Path to the JSONL output file. Created if absent; appended if
             resume=True and it already exists.
-        delay_seconds: Seconds to sleep between questions as a courtesy to
-            upstream APIs. Default 1.0.
+        delay_seconds: Seconds to sleep between questions. Default 3.0 — Groq-rate-limit-
+            friendly; smaller values may work at small N but will hit 429s at scale.
         resume: If True and output_path exists, skip questions whose IDs are already
             present in the file. Default True.
+        max_retries: Number of retry attempts per endpoint on transient failures. Default 3.
         _transport: Internal — inject a custom httpx transport (e.g. MockTransport
             in tests). Production callers should leave this as None.
+
+    Returns:
+        dict with keys: both_ok, baseline_errors, graph_errors, total_retries, total_ran.
     """
     completed_ids: set[str] = set()
     if resume and output_path.exists():
@@ -257,17 +332,27 @@ async def run_eval(
     baseline_errors = 0
     graph_errors = 0
     both_ok = 0
+    retry_counter = [0]
 
     async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=_transport) as client:
         for idx, question in enumerate(to_run):
             i = n_done + idx + 1
             print(f"[{i}/{n_total}] {question.id}: {question.question[:80]}...")
 
-            result = await run_single_question(client, question, base_url)
+            result = await run_single_question(
+                client,
+                question,
+                base_url,
+                max_retries=max_retries,
+                _retry_counter=retry_counter,
+            )
 
             with output_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(dataclasses.asdict(result)) + "\n")
                 fh.flush()
+                # Belt-and-braces durability: flush + fsync per line. Adds ~5ms overhead
+                # per question but eliminates entire classes of crash-related data loss.
+                os.fsync(fh.fileno())
 
             if result.baseline.status != "ok":
                 baseline_errors += 1
@@ -279,11 +364,21 @@ async def run_eval(
             if idx < n_todo - 1:
                 await asyncio.sleep(delay_seconds)
 
+    total_retries = retry_counter[0]
     print(
         f"Eval complete. {both_ok}/{n_todo} both ok, "
-        f"{baseline_errors} baseline errors, {graph_errors} graph errors. "
+        f"{baseline_errors} baseline errors, {graph_errors} graph errors, "
+        f"{total_retries} retries across all questions. "
         f"Output: {output_path}"
     )
+
+    return {
+        "both_ok": both_ok,
+        "baseline_errors": baseline_errors,
+        "graph_errors": graph_errors,
+        "total_retries": total_retries,
+        "total_ran": n_todo,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -332,16 +427,42 @@ if __name__ == "__main__":
     parser.add_argument(
         "--delay-seconds",
         type=float,
-        default=1.0,
+        default=3.0,
         metavar="N",
-        help="Seconds to sleep between questions (default: 1.0)",
+        help=(
+            "Seconds to sleep between questions (default: 3.0 — Groq-rate-limit-friendly; "
+            "smaller values may work at small N but will hit 429s at scale)"
+        ),
     )
     parser.add_argument(
         "--no-resume",
         action="store_true",
         help="Disable resume — re-run all questions even if output file exists",
     )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        metavar="N",
+        help=(
+            "Max retries per endpoint on transient errors (429, 503, 504, timeouts). "
+            "Uses exponential backoff capped at 30s. Default: 3."
+        ),
+    )
+    parser.add_argument(
+        "--target",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Target number of successful (both-ok) results. If higher than --n, the runner "
+            "samples additional questions until the target is reached or the dataset is "
+            "exhausted. Default: same as --n."
+        ),
+    )
     args = parser.parse_args()
+
+    target = args.target if args.target is not None else args.n
 
     if args.output is None:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -350,14 +471,61 @@ if __name__ == "__main__":
     type_filter = None if args.qtype == "both" else args.qtype
 
     all_questions = load_dataset()
-    sample = sample_questions(all_questions, n=args.n, seed=args.seed, type_filter=type_filter)
 
-    asyncio.run(
+    # Pre-sample a pool large enough to cover --target with buffer for failures.
+    # Using the same seed guarantees that full_pool[:n] == the original --n sample,
+    # so resume behaviour is stable when --target triggers extra questions.
+    if target > args.n:
+        pool_n = min(target * 2, len(all_questions))
+        full_pool = sample_questions(all_questions, n=pool_n, seed=args.seed, type_filter=type_filter)
+        initial_sample = full_pool[: args.n]
+        reserve = full_pool[args.n :]
+    else:
+        initial_sample = sample_questions(
+            all_questions, n=args.n, seed=args.seed, type_filter=type_filter
+        )
+        reserve = []
+
+    stats = asyncio.run(
         run_eval(
-            questions=sample,
+            questions=initial_sample,
             base_url=args.base_url,
             output_path=args.output,
             delay_seconds=args.delay_seconds,
             resume=not args.no_resume,
+            max_retries=args.max_retries,
         )
     )
+
+    total_successful = stats["both_ok"]
+    total_ran = stats["total_ran"]
+
+    # --target top-up loop: run reserve questions until target is reached.
+    if target > args.n and total_successful < target and reserve:
+        remaining = list(reserve)
+        while total_successful < target and remaining:
+            needed = target - total_successful
+            batch = remaining[: needed + 5]  # small buffer per batch
+            remaining = remaining[len(batch) :]
+
+            batch_stats = asyncio.run(
+                run_eval(
+                    questions=batch,
+                    base_url=args.base_url,
+                    output_path=args.output,
+                    delay_seconds=args.delay_seconds,
+                    resume=not args.no_resume,
+                    max_retries=args.max_retries,
+                )
+            )
+            total_successful += batch_stats["both_ok"]
+            total_ran += batch_stats["total_ran"]
+
+    if args.target is not None:
+        if total_successful >= target:
+            print(f"Target {target} reached")
+        else:
+            print(
+                f"Target {target} not reached; ran {total_ran} questions, "
+                f"{total_successful} successful"
+            )
