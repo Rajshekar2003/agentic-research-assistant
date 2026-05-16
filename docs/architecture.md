@@ -195,6 +195,22 @@ The graph endpoint gets a more generous cap (60s vs 30s) because in the worst ca
 
 ---
 
+## Evaluation pipeline
+
+The eval harness lives in `backend/eval/hotpot/` and is intentionally excluded from the pytest suite — it requires live APIs (Tavily, Groq) and a running server. All four components have mocked unit tests in `backend/tests/`.
+
+**Loader** (`backend/eval/hotpot/loader.py`). Downloads and caches the HotpotQA dev set (~7,405 questions, distractor setting). Exposes a `HotpotQuestion` dataclass. Context paragraphs from the dataset are excluded — the system retrieves its own evidence via Tavily, so including the dataset's source passages would defeat the eval. Sampling is deterministic by seed with an optional type filter (bridge, comparison, or both).
+
+**Runner** (`backend/eval/hotpot/runner.py`). Calls `POST /research` and `POST /research/graph` sequentially for each question. Output is JSONL with `flush+fsync` per line so a crash mid-run leaves a valid partial file. Resumable on rerun via `question_id` deduplication — already-answered questions are skipped. `--max-retries` (default 3) adds exponential backoff capped at 30s for transient errors (429, 503, 504, network timeouts). `--target` keeps sampling from the same seeded pool until N questions succeed — a safety net when quota exhaustion truncates a run short.
+
+**Scorer** (`backend/eval/hotpot/scorer.py`). Exact Match (EM) and token-level F1 computed by direct reproduction of HotpotQA's official `hotpot_evaluate_v1.py` — same normalization (lowercase, strip punctuation, strip articles a/an/the, collapse whitespace), same EM and F1 logic. Errored entries are skipped when computing means. Output: `scores.json` with per-question scores and per-type (bridge/comparison) aggregates.
+
+**Reporter** (`backend/eval/hotpot/reporter.py`). Renders `scores.json` plus optional runner JSONL into a markdown report. Sections: headline EM/F1 table, per-type breakdown, latency (mean/median/P95), refusal counts (pattern-matched against phrases like "couldn't verify", "cannot be determined"), and sample question pairs spanning the score distribution.
+
+**Test coverage.** 134 tests as of Week 4 Day 20. All eval-component tests are mocked — no network calls in CI.
+
+---
+
 ## Known limitations
 
 - Token counting in the Gemini fallback path may return `None` for `tokens_in`/`tokens_out` depending on SDK version; the Week 4 eval harness will use `prompt_token_count` from native API responses.
@@ -208,6 +224,10 @@ The graph endpoint gets a more generous cap (60s vs 30s) because in the worst ca
 - Graph latency varies widely (3–26s observed across smoke eval queries); no defined p95 budget or short-circuit path for simple queries before deployment.
 - Soft hallucinations remain possible when retrieved sources themselves contain speculative claims. The Critic evaluates the draft against the retrieved facts, not against ground truth — a misleading source that makes it through Searcher can persist to the final answer (observed on q03 Tailwind comparison in smoke eval).
 - Critic does not apply a source-quality signal. All Tavily results are treated as equally credible; speculative or opinionated sources are weighted the same as official documentation.
+- HotpotQA EM rewards terse single-word answers; both systems produce verbose prose so EM trends to 0 even when answers are substantively correct. Refusal tracking exists to partially compensate.
+- Open-web retrieval via Tavily differs from HotpotQA's original closed-book setup — absolute EM/F1 numbers are not directly comparable to published baselines.
+- Free-tier provider quotas (Groq, Tavily) impose a practical ceiling on single-run sample size. Day 21's 200-question run completed only 32 before quota exhaustion.
+- Planner entity-resolution failures (e.g. "No. 1455 Flight" → Southwest Airlines flight 1455) propagate through Searcher → FactChecker → Writer with no recovery path.
 
 ---
 
