@@ -129,7 +129,7 @@ class ResearchState(TypedDict, total=False):
 
 **Frontend** (`frontend/app/page.tsx`, `frontend/lib/api.ts`). A single-page Next.js 16 application with a React state machine (query, mode, loading, result, error) and a typed API client that constructs the URL from the `mode` parameter and applies a 30-second `AbortController` timeout. The frontend is intentionally thin — no routing, no state management library, no component library — because the engineering interest is in the backend pipeline. The Baseline/Graph pill toggle maps directly to the two backend endpoints, enabling manual comparison without separate browser tabs. Failure mode: `NEXT_PUBLIC_API_URL` defaults to `localhost:8000`; a production deploy requires the env var to be set and is not validated at build time.
 
-**Test strategy** (`backend/tests/`). All 69 tests mock external services at the module-attribute level via `monkeypatch.setattr`, targeting the specific import path where the function is called (e.g., `app.graph.workflow.search`, not `app.tools.search.search`). The conftest sets dummy API keys at module load time, before any `Settings()` construction is triggered by `TestClient` imports. `asyncio_mode = auto` in `pyproject.toml` means all `async def` test functions run without a decorator. What is not tested: actual network calls to Tavily/Groq/Gemini, real SDK response parsing, Tavily rate-limit behavior, LangGraph checkpoint and streaming APIs, and end-to-end frontend behavior.
+**Test strategy** (`backend/tests/`). All 134 tests mock external services at the module-attribute level via `monkeypatch.setattr`, targeting the specific import path where the function is called (e.g., `app.graph.workflow.search`, not `app.tools.search.search`). The conftest sets dummy API keys at module load time, before any `Settings()` construction is triggered by `TestClient` imports. `asyncio_mode = auto` in `pyproject.toml` means all `async def` test functions run without a decorator. What is not tested: actual network calls to Tavily/Groq/Gemini, real SDK response parsing, Tavily rate-limit behavior, LangGraph checkpoint and streaming APIs, and end-to-end frontend behavior.
 
 ---
 
@@ -261,7 +261,7 @@ agentic-research-assistant/
 │   │   ├── config.py         # pydantic-settings Settings, lru_cache singleton
 │   │   ├── main.py           # FastAPI app factory, CORS, /health endpoint
 │   │   └── schemas.py        # Shared Pydantic v2 models (Source, ResearchRequest, ResearchResponse)
-│   ├── tests/                # Pytest suite — all mocked, asyncio_mode=auto, 69 tests
+│   ├── tests/                # Pytest suite — all mocked, asyncio_mode=auto, 134 tests
 │   └── venv/                 # Python 3.13 virtual environment (not committed)
 ├── docs/                     # Architecture document and week retrospectives
 └── frontend/                 # Next.js 16 + Tailwind v4 single-page frontend

@@ -19,7 +19,7 @@
 
 EM is 0 for both systems — an artifact of HotpotQA expecting terse single-word answers against verbose prose outputs. Refusal tracking compensates partially; the graph refuses less and leads on F1.
 
-**Counts:** 134 tests, 5 doc files in `docs/` (architecture, week2-retro, week4-retro, week4-close, plus diagrams placeholder).
+Counts: 134 tests, doc files in docs/ covering architecture, weekly retros, and the Week 4 close
 
 ---
 
