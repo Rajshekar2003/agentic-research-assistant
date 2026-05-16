@@ -70,6 +70,8 @@ Week 4 runs at 200-500 questions to confirm trends.
 
 **Day 23/24 — architecture.md updated with eval pipeline section and known limitations. Week 4 close doc written. Week 5 deployment plan opens: Railway backend, Vercel frontend, basic rate limiting + auth.**
 
+**Day 25 — backend deployed to Render via render.yaml blueprint. Build initially failed on pydantic-core (no Python 3.14 wheel); fixed by pinning Python 3.13 via .python-version. Live at https://agentic-research-assistant-backend.onrender.com. Health endpoint returns 200 with env=production. Tavily free-tier quota (1000 credits) exhausted by Day 21's 200-question run, so /research returns documented 503 SearchUnavailable until monthly reset. This is the expected behavior per architecture.md known limitations. Frontend (Vercel) deploys Day 26.**
+
 ## Architecture
 
 Current graph (Day 11): **5 nodes** — `planner` decomposes query into 2-4 sub-questions; `searcher` runs Tavily per sub-question, deduplicates URLs globally (cap 8); `fact_checker` extracts verified {claim, sources} pairs; `writer` synthesizes final answer (revision-aware: uses different system prompt + previous draft + critique on revision passes); `critic` evaluates draft against verified facts and routes: approve → END, revise (revision_count < 2) → writer, revise (revision_count ≥ 2) → END (hard cap). `revision_count` is incremented ONLY by Critic on "revise" verdicts.
