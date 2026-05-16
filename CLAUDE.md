@@ -66,6 +66,8 @@ Week 4 runs at 200-500 questions to confirm trends.
 
 **Day 20 complete — runner hardened for scale.** Default `--delay-seconds` bumped to 3.0 (Groq-rate-limit-friendly; smaller values may work at small N but will hit 429s at scale). New `--max-retries` flag (default 3) handles transient errors (429, 503, 504, network timeouts) with exponential backoff capped at 30s; retry count surfaced in the per-run summary. New `--target` flag samples additional questions from the same seeded pool to reach a target successful count — safety net for Day 21's 200-question run. Explicit `flush+fsync` per JSONL line for crash safety. ~134 tests passing (128 from Week 3 + 6 new retry tests).
 
+**Day 21 complete — 200-question HotpotQA run.** 32/200 completed before free-tier quota exhaustion. F1 baseline 0.055 / graph 0.074. Refusal rate baseline 41% / graph 22%. Retry logic absorbed 1010 retries cleanly. Full report at `backend/eval/hotpot/runs/day21_main_n200-report.md`.
+
 ## Architecture
 
 Current graph (Day 11): **5 nodes** — `planner` decomposes query into 2-4 sub-questions; `searcher` runs Tavily per sub-question, deduplicates URLs globally (cap 8); `fact_checker` extracts verified {claim, sources} pairs; `writer` synthesizes final answer (revision-aware: uses different system prompt + previous draft + critique on revision passes); `critic` evaluates draft against verified facts and routes: approve → END, revise (revision_count < 2) → writer, revise (revision_count ≥ 2) → END (hard cap). `revision_count` is incremented ONLY by Critic on "revise" verdicts.
