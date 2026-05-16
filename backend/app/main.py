@@ -43,9 +43,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Agentic Research Assistant", version="0.1.0", lifespan=lifespan)
 
+# TODO: add Vercel production URL to allow_origins once frontend deploys (Day 26)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
+    # Matches any *.vercel.app origin (PR previews + production before custom domain is set)
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

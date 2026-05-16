@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: agentic-research-assistant-backend
+    runtime: python
+    # singapore is a valid Render region slug; if the free tier does not support it,
+    # change to oregon (US West) — see https://render.com/docs/regions for the full list.
+    region: singapore
+    plan: free
+    branch: main
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: GROQ_API_KEY
+        sync: false  # set in Render dashboard — do not commit the real value
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
