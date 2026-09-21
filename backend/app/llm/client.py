@@ -117,7 +117,7 @@ class LLMClient:
                 type(exc).__name__,
             )
         except groq_module.APIStatusError as exc:
-            if exc.status_code >= 500:
+            if exc.status_code > 500:
                 groq_error = exc
                 logger.warning(
                     "Groq fallback triggered by APIStatusError(status=%d) — trying Gemini",
