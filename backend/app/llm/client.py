@@ -2,7 +2,7 @@
 LLM client for the Agentic Research Assistant.
 
 Design:
-- Primary provider: Groq via AsyncGroq (model: llama-3.3-70b-versatile), 30 s per-call
+- Primary provider: Groq via AsyncGroq (model: openai/gpt-oss-120b), 30 s per-call
   timeout configured on the SDK client itself.
 - Fallback provider: Gemini via google-genai async client (model: gemini-2.5-flash-lite),
   30 s timeout enforced with asyncio.wait_for because the SDK does not expose a top-level
@@ -36,7 +36,7 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_GROQ_MODEL = "llama-3.3-70b-versatile"
+_GROQ_MODEL = "openai/gpt-oss-120b"
 _GEMINI_MODEL = "gemini-2.5-flash-lite"
 _TIMEOUT_SECONDS = 30.0
 
