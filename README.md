@@ -57,3 +57,4 @@ TBD (Week 2)
 - **Validation**: Pydantic v2, pydantic-settings
 - **Testing**: pytest, pytest-asyncio
 - **Frontend**: Next.js (TBD)
+Small docs test.
